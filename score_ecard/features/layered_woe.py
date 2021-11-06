@@ -116,10 +116,9 @@ def get_woe_card(df_X, df_Y, fields_bins):
     # assert 'report_fee' in df_Y.columns
 
     woe_list = []
-    print("get woe card ....\n")
     len_=len(fields_bins)
     for i,(col, bins) in enumerate(fields_bins.items()):
-        progress_bar(i,len_)
+        progress_bar(i,len_-1)
         bin_data = pd.cut(df_X.loc[:,col].fillna(0), bins=bins)
 
         # label1：是否出险
@@ -137,9 +136,6 @@ def get_woe_card(df_X, df_Y, fields_bins):
             card2 = woe2.woe_card
             card[["已赚保费", "赔付金额", "已赚保费占比", "赔付金额占比", "woe0", "iv0"]] = card2[
                 ['get_fee', 'report_fee', 'get_fee_prob', 'report_fee_prob', 'woe', 'iv']]
-        else:
-            if i<1:
-                print("\n input data have no 'fee_got & report_fee' info!")
 
         # label3：是否有过赔付2k+
         if 'label_ordinary' in df_Y.columns:
@@ -148,9 +144,6 @@ def get_woe_card(df_X, df_Y, fields_bins):
             card3 = woe3.woe_card
             card[["赔付车辆数", "无赔付车辆数", "赔付车辆占比", "无赔付车辆占比", "woe2", "iv2"]] = card3[
                 ['good', 'bad', 'good_prob', 'bad_prob', 'woe', 'iv']]
-        else:
-            if i < 1:
-                print("\ninput data have no 'label_ordinary' info! eg:>2k")
 
         # label4：是否大事故1w+
         if 'label_serious' in df_Y.columns:
@@ -159,9 +152,6 @@ def get_woe_card(df_X, df_Y, fields_bins):
             card4 = woe4.woe_card
             card[["重大事故车辆数", "非重大事故车辆数", "重大事故占比", "非重大事故占比", "woe3", "iv3"]] = card4[
                 ['good', 'bad', 'good_prob', 'bad_prob', 'woe', 'iv']]
-        else:
-            if i < 1:
-                print("\ninput data have no 'label_serious' info! eg:>1W")
 
         # label5：是否重大事故5w+
         if 'label_major' in df_Y.columns:
@@ -170,9 +160,6 @@ def get_woe_card(df_X, df_Y, fields_bins):
             card5 = woe5.woe_card
             card[["特大事故车辆数", "非特大事故车辆数", "特大事故占比", "非特大事故占比", "woe4", "iv4"]] = card5[
                 ['good', 'bad', 'good_prob', 'bad_prob', 'woe', 'iv']]
-        else:
-            if i < 1:
-                print("\ninput data have no 'label_major' info! eg:>5W")
 
         # label6：是否特大事故20W'+
         if 'label_devastating' in df_Y.columns:
@@ -181,9 +168,6 @@ def get_woe_card(df_X, df_Y, fields_bins):
             card5 = woe5.woe_card
             card[["特大事故车辆数", "非特大事故车辆数", "特大事故占比", "非特大事故占比", "woe5", "iv5"]] = card5[
                 ['good', 'bad', 'good_prob', 'bad_prob', 'woe', 'iv']]
-        else:
-            if i < 1:
-                print("\ninput data have no 'label_devastating' info! eg:>20W")
 
         woe_list.append(card)
     woe_dict = pd.concat(woe_list).reset_index(drop=True)

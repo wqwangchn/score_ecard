@@ -11,6 +11,7 @@ Desc:
 import sys
 import math
 import inspect
+import numpy as np
 
 # 1.进度条展示 progress_bar(1, 100)
 def progress_bar(portion, total):
@@ -36,3 +37,9 @@ def get_retrieve_name(var):
     callers_local_vars = inspect.currentframe().f_back.f_locals.items()
     list_name = [var_name for var_name, var_val in callers_local_vars if var_val is var]
     return list_name
+
+# 3.计算加权方差
+def get_weighted_std(values,weights):
+    average = np.average(values, weights=weights)
+    variance = np.average((values-average)**2, weights=weights)
+    return variance
