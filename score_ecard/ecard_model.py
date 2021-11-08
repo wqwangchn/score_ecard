@@ -39,7 +39,6 @@ class ECardModel():
             self.params_rf.update(**kwargs_rf)
         if kwargs_lr:
             self.params_lr.update(**kwargs_lr)
-        self.sample_frac=0.7
         self.rf_cards = []
         self.score_model = score_card.ScoreCardModel()
 
@@ -64,10 +63,10 @@ class ECardModel():
 
         for i,tree_bins in enumerate(rf_boundaries):
             clf_lr = LogisticRegression(**self.params_lr)
-            df_woe = woe.get_woe_card(df_X, df_Y, tree_bins)
+            sample_idx = df_X.sample(frac=1.0, replace=True, weights=sample_weight, random_state=i).index
+            df_woe = woe.get_woe_card(df_X.loc[sample_idx], df_Y.loc[sample_idx], tree_bins)
             x = self.get_woe_features(df_X, df_woe, tree_bins)
-            sample_idx = df_X.index.isin(df_X.sample(frac=self.sample_frac, weights=sample_weight, random_state=i).index)
-            clf_lr.fit(x[sample_idx], df_y[sample_idx], sample_weight=sample_weight[sample_idx])
+            clf_lr.fit(x.loc[sample_idx], df_y.loc[sample_idx], sample_weight=sample_weight.loc[sample_idx])
             clf_lr.col_name=x.columns
             tree_card = self.get_score_card(clf_lr,df_woe)
             self.rf_cards.append(tree_card)
@@ -274,5 +273,5 @@ if __name__ == '__main__':
     df_Y = df_train_data[['label', 'label_ordinary',
                           'label_serious', 'label_major', 'label_devastating', 'label_8w']]
     ecard = ECardModel(kwargs_rf={'n_estimators':2})
-    ecard.fit(df_X, df_Y,df_X, df_Y,sample_weight=df_X.index)
+    ecard.fit(df_X, df_Y,df_X, df_Y,sample_weight=df_Y['label']+1)
     print(ecard.get_importance_())
