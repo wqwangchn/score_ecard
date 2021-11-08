@@ -24,6 +24,7 @@ class ECardModel():
         self.params_rf = {
             'n_estimators': 100,
             'max_depth': 10,
+            'max_features': 0.8,
             'min_samples_leaf': 0.05,
             'bootstrap': True,
             'random_state': 666
@@ -41,7 +42,7 @@ class ECardModel():
         self.rf_cards = []
         self.score_model = score_card.ScoreCardModel()
 
-    def fit(self, df_X, df_Y, sample_weight=None):
+    def fit(self, df_X, df_Y, validation_X:pd.DataFrame=None, validation_Y:pd.DataFrame=None, sample_weight=None):
         df_y, df_Y = self.check_label(df_Y)
         clf_rf = RandomForestClassifier(**self.params_rf)
         clf_rf.fit(df_X, df_y, sample_weight=sample_weight)
@@ -50,8 +51,14 @@ class ECardModel():
         self.blocks = gl_boundaries
         init_ecard = self.get_init_ecard(df_X,gl_boundaries)
         print("start model fitting ...")
-        # print(rf_boundaries) --优化效率
         pre_y=np.array([0])
+        # vlidation part
+        validation_idx = False
+        if type(validation_X) != type(None):
+            assert validation_X.shape[0] == validation_Y.shape[0]
+            df_valy, df_valY = self.check_label(validation_Y)
+            pre_valy = np.array([0])
+            validation_idx=True
         for i,tree_bins in enumerate(rf_boundaries):
             clf_lr = LogisticRegression(**self.params_lr)
             df_woe = woe.get_woe_card(df_X, df_Y, tree_bins)
@@ -60,11 +67,17 @@ class ECardModel():
             clf_lr.col_name=x.columns
             tree_card = self.get_score_card(clf_lr,df_woe)
             self.rf_cards.append(tree_card)
-
             pre_y = pre_y + clf_lr.predict_proba(x)[:,1]
             cur_pre = (pre_y/(i+1))
             auc = self.score_model.get_auc(cur_pre,df_y, pre_target=1)[0]
-            print("sep_{}:\tauc={}".format(i+1,auc))
+            validation_info=None
+            if validation_idx:
+                valx = self.get_woe_features(validation_X, df_woe, tree_bins)
+                pre_valy = pre_valy + clf_lr.predict_proba(valx)[:, 1]
+                cur_pre = (pre_valy / (i + 1))
+                val_auc = self.score_model.get_auc(cur_pre, df_valy, pre_target=1)[0]
+                validation_info = "vlidation_auc={}".format(val_auc)
+            print("sep_{}:\tauc={} {}".format(i+1,auc,validation_info))
         self.score_ecard = self.get_cards_merge(self.rf_cards, init_ecard)
 
     def check_label(self, df_Y):
@@ -256,6 +269,6 @@ if __name__ == '__main__':
     df_X = df_train_data[features_col]
     df_Y = df_train_data[['label', 'label_ordinary',
                           'label_serious', 'label_major', 'label_devastating', 'label_8w']]
-    ecard = ECardModel(kwargs_rf={'n_estimators':1})
-    ecard.fit(df_X, df_Y)
+    ecard = ECardModel(kwargs_rf={'n_estimators':2})
+    ecard.fit(df_X, df_Y,df_X, df_Y)
     print(ecard.get_importance_())

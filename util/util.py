@@ -43,3 +43,40 @@ def get_weighted_std(values,weights):
     average = np.average(values, weights=weights)
     variance = np.average((values-average)**2, weights=weights)
     return variance
+
+# 4.计算等频分箱
+def get_frequence_blocks(x, box_num=10, drop_duplicates=True):
+    '''
+        等频分箱
+    :param x: dtype=[]
+    :param bins: 分箱数量
+    :return: 箱边界
+    '''
+    x=np.sort(x).astype(float)
+    len_clocks = int(min(len(x),box_num))
+    ind = np.linspace(0, len(x)-1, len_clocks+1).astype(int)
+    blocks=np.array(x)[ind].astype(float)
+    if drop_duplicates:
+        blocks = np.unique(blocks)
+    if len(blocks)<2:
+        return [-np.inf,np.inf]
+    blocks[0] = -np.inf
+    blocks[-1] = np.inf
+    return blocks.tolist()
+
+# 4.计算等距分箱
+def get_distince_blocks(x, box_num=5, drop_duplicates=True):
+    '''
+        等距分箱
+    :param x: dtype=[]
+    :param bins: 分箱数量
+    :return: 箱边界
+    '''
+    blocks = np.linspace(min(x), max(x), box_num+1).astype(float)
+    if drop_duplicates:
+        blocks = np.unique(blocks)
+    if len(blocks)<2:
+        return [-np.inf,np.inf]
+    blocks[0] = -np.inf
+    blocks[-1] = np.inf
+    return blocks.tolist()
