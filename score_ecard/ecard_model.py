@@ -20,10 +20,10 @@ from score_ecard import score_card
 warnings.filterwarnings('ignore')
 
 class ECardModel():
-    def __init__(self,**kwargs):
+    def __init__(self,kwargs_lr=None, kwargs_rf=None):
         self.params_rf = {
-            'n_estimators': 2,
-            'max_depth': 5,
+            'n_estimators': 100,
+            'max_depth': 10,
             'min_samples_leaf': 0.05,
             'bootstrap': True,
             'random_state': 666
@@ -34,15 +34,17 @@ class ECardModel():
             "C": 0.2,
             "solver": 'liblinear'
         }
-        self.params_rf.update(**kwargs)
-        self.params_lr.update(**kwargs)
+        if kwargs_rf:
+            self.params_rf.update(**kwargs_rf)
+        if kwargs_lr:
+            self.params_lr.update(**kwargs_lr)
         self.rf_cards = []
         self.score_model = score_card.ScoreCardModel()
 
     def fit(self, df_X, df_Y, sample_weight=None):
         df_y, df_Y = self.check_label(df_Y)
         clf_rf = RandomForestClassifier(**self.params_rf)
-        clf_rf.fit(df_X, df_y, sample_weight=None)
+        clf_rf.fit(df_X, df_y, sample_weight=sample_weight)
         rf_boundaries = rf_bolcks.get_randomforest_blocks(clf_rf,col_name=df_X.columns)
         gl_boundaries = self.get_boundaries_merge(rf_boundaries)
         self.blocks = gl_boundaries
@@ -177,7 +179,7 @@ class ECardModel():
     def get_single_score(self, data: dict, level_threshold=None):
         score = 0
         score_detail = {}
-        df_card = self.ecard
+        df_card = self.score_ecard
         for i, row in df_card.iterrows():
             field_ = row['field_']
             bins_ = row['bins_']
@@ -218,7 +220,7 @@ class ECardModel():
         :return:
         '''
         df_score = pd.DataFrame()
-        df_card = self.ecard
+        df_card = self.score_ecard
         for field_, bin_ in self.blocks.items():
             _card = df_card[df_card.field_ == field_]
             _card["bins_"] = _card.bins_.astype(str)
@@ -254,6 +256,6 @@ if __name__ == '__main__':
     df_X = df_train_data[features_col]
     df_Y = df_train_data[['label', 'label_ordinary',
                           'label_serious', 'label_major', 'label_devastating', 'label_8w']]
-    ecard = ECardModel()
+    ecard = ECardModel(kwargs_rf={'n_estimators':1})
     ecard.fit(df_X, df_Y)
     print(ecard.get_importance_())
