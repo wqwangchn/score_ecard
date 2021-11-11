@@ -20,7 +20,7 @@ from score_ecard import score_card
 warnings.filterwarnings('ignore')
 
 class ECardModel():
-    def __init__(self,kwargs_lr=None, kwargs_rf=None):
+    def __init__(self,kwargs_lr=None, kwargs_rf=None, sample_frac=1.0):
         self.params_rf = {
             'n_estimators': 100,
             'max_depth': 10,
@@ -40,6 +40,7 @@ class ECardModel():
         if kwargs_lr:
             self.params_lr.update(**kwargs_lr)
         self.rf_cards = []
+        self.sample_frac = sample_frac
         self.score_model = score_card.ScoreCardModel()
 
     def fit(self, df_X, df_Y, validation_X:pd.DataFrame=None, validation_Y:pd.DataFrame=None, sample_weight=None):
@@ -63,7 +64,9 @@ class ECardModel():
 
         for i,tree_bins in enumerate(rf_boundaries):
             clf_lr = LogisticRegression(**self.params_lr)
-            sample_idx = df_X.sample(frac=1.0, replace=True, weights=sample_weight, random_state=i).index
+            sample_idx = df_X.sample(
+                frac=1.0, replace=True, weights=sample_weight, random_state=i
+            ).sample(frac=self.sample_frac, replace=False, random_state=i).index
             df_woe = woe.get_woe_card(df_X.loc[sample_idx], df_Y.loc[sample_idx], tree_bins)
             x = self.get_woe_features(df_X, df_woe, tree_bins)
             clf_lr.fit(x.loc[sample_idx], df_y.loc[sample_idx], sample_weight=sample_weight.loc[sample_idx])
