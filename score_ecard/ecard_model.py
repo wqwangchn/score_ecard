@@ -82,8 +82,8 @@ class ECardModel():
                 pre_valy = pre_valy + clf_lr.predict_proba(valx)[:, 1]
                 cur_pre = (pre_valy / (i + 1))
                 val_auc = self.score_model.get_auc(cur_pre, df_valy, pre_target=1)[0]
-                validation_info = "vlidation_auc={}".format(val_auc)
-            print("sep_{}:\tauc={} {}".format(i+1,train_auc,validation_info))
+                validation_info = "vlidation_auc={}".format(round(val_auc,4))
+            print("sep_{}:\tauc={} {}".format(i+1,round(train_auc,4),validation_info))
         self.score_ecard = self.get_cards_merge(self.rf_cards, init_ecard)
 
     def check_label(self, df_Y):
@@ -274,7 +274,7 @@ if __name__ == '__main__':
                     ]
     df_X = df_train_data[features_col]
     df_Y = df_train_data[['label', 'label_ordinary',
-                          'label_serious', 'label_major', 'label_devastating', 'label_8w']]
+                          'label_serious', 'label_major', 'label_devastating', 'label_8w','fee_got','report_fee']]
     ecard = ECardModel(kwargs_rf={'n_estimators':2})
     ecard.fit(df_X, df_Y,df_X, df_Y,sample_weight=df_Y['label']+1)
     print(ecard.get_importance_())
