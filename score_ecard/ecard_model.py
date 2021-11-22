@@ -10,6 +10,7 @@ Desc:
 from interval import Interval
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report
 from score_ecard.features import randomforest_blocks as rf_bolcks
 from score_ecard.features import layered_woe as woe
 from util import progress_bar, get_weighted_std
@@ -27,6 +28,7 @@ class ECardModel():
             'max_features': 'auto',
             'min_samples_leaf': 0.05,
             'bootstrap': True,
+            'class_weight': "balanced",
             'random_state': 666
         }
         self.params_lr = {
@@ -55,6 +57,9 @@ class ECardModel():
 
         clf_rf = RandomForestClassifier(**self.params_rf)
         clf_rf.fit(df_X, df_y, sample_weight=sample_weight)
+        rf_report = classification_report(df_y, clf_rf.predict(df_X))
+        print('RF-report:','\n',rf_report)
+
         rf_boundaries = rf_bolcks.get_randomforest_blocks(clf_rf,col_name=df_X.columns)
         gl_boundaries = self.get_boundaries_merge(rf_boundaries)
         self.blocks = gl_boundaries
@@ -73,7 +78,7 @@ class ECardModel():
             self.rf_cards.append(tree_card)
             pre_y = pre_y + clf_lr.predict_proba(x)[:,1:].sum(axis=1)
             cur_pre = (pre_y/(i+1))
-            train_auc = self.score_model.get_auc(cur_pre,df_y_binary, pre_neg_target=0)[0]
+            train_auc = self.score_model.get_auc(cur_pre,df_y_binary, pre_target=1)[0]
             train_info = "train_auc={}".format(round(train_auc, 4))
             if ('fee_got' in df_Y.columns) and ('report_fee' in df_Y.columns):
                 train_insurance_auc = \
@@ -85,7 +90,7 @@ class ECardModel():
                 valx = self.get_woe_features(validation_X, df_woe, tree_bins)
                 pre_valy = pre_valy + clf_lr.predict_proba(valx)[:, 1:].sum(axis=1)
                 cur_pre = (pre_valy / (i + 1))
-                validation_auc = self.score_model.get_auc(cur_pre, df_valy_binary, pre_neg_target=0)[0]
+                validation_auc = self.score_model.get_auc(cur_pre, df_valy_binary, pre_target=1)[0]
                 validation_info = "validation_auc={}".format(round(validation_auc, 4))
                 if ('fee_got' in df_valY.columns) and ('report_fee' in df_valY.columns):
                     validation_insurance_auc = self.score_model.get_g7_auc(pd.DataFrame(cur_pre), df_valY["fee_got"], df_valY["report_fee"], )[0]
@@ -93,12 +98,13 @@ class ECardModel():
             print("sep_{}:\t{}\t{}".format(i+1,train_info,validation_info))
         self.score_ecard = self.get_cards_merge(self.rf_cards, init_ecard)
 
-    def check_label(self, df_Y):
+    def check_label(self, df_label):
+        df_Y=df_label.copy()
         if df_Y.shape[-1] == 1:
             df_Y.columns = ['label']
         if 'label' not in df_Y.columns:
             df_Y['label'] = df_Y.iloc[:,0]
-        df_y=df_Y.label
+        df_y=df_Y.label.astype(int)
         if df_y.unique().size>2:
             df_y_binary = df_y.apply(lambda x: 1 if x>0 else 0)
         else:

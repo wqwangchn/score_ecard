@@ -54,17 +54,14 @@ class ScoreCardModel:
         return bad_prob
 
     @classmethod
-    def get_auc(cls, df_pre, df_label, pre_target=1, pre_neg_target=None):
+    def get_auc(cls, df_pre, df_label, pre_target=1):
         '''
         功能: 计算KS值，输出对应分割点和累计分布函数曲线图
         :param df_pre: 一维数组或series，代表模型得分
         :param df_label: 一维数组或series，代表真实的标签{0,1}
         :return: 'auc': auc值，'crossdens': TPR&FPR
         '''
-        if pre_neg_target==None:
-            df_label = df_label.apply(lambda x: 1 if x == pre_target else 0)
-        else:
-            df_label = df_label.apply(lambda x: 1 if x != pre_neg_target else 0)
+        df_label = df_label.apply(lambda x: 1 if x == pre_target else 0)
         crossfreq = pd.crosstab(df_pre, df_label).sort_index(ascending=False)  # 按照预测概率从大到小排序作为阈值
         crossdens = crossfreq.cumsum(axis=0) / crossfreq.sum()
         crossdens.columns = ['fpr', 'tpr']
@@ -97,7 +94,7 @@ class ScoreCardModel:
         return auc, crossdens
 
     @classmethod
-    def get_ks(cls, df_pre, df_label, pre_target=1, pre_neg_target=None):
+    def get_ks(cls, df_pre, df_label, pre_target=1):
         '''
         功能: 计算KS值，输出对应分割点和累计分布函数曲线图
         :param df_pre: 一维数组或series，代表模型得分
@@ -106,10 +103,7 @@ class ScoreCardModel:
             'ks': KS值
             'crossdens': 好坏客户累积概率分布以及其差值gap
         '''
-        if pre_neg_target==None:
-            df_label = df_label.apply(lambda x: 1 if x == pre_target else 0)
-        else:
-            df_label = df_label.apply(lambda x: 1 if x != pre_neg_target else 0)
+        df_label = df_label.apply(lambda x: 1 if x == pre_target else 0)
         crossfreq = pd.crosstab(df_pre, df_label).sort_index(ascending=False)  # 按概率降序排序
         crossdens = crossfreq.cumsum(axis=0) / crossfreq.sum()
         crossdens.columns = ['fpr', 'tpr']
