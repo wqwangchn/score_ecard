@@ -23,10 +23,10 @@ class ECardModel():
     def __init__(self,kwargs_lr=None, kwargs_rf=None, sample_frac=1.0):
         self.params_rf = {
             'n_estimators': 100,
-            'max_depth': 10,
-            'max_features': 0.5,
+            'max_depth': 5,
+            'max_features': 'auto',
             'min_samples_leaf': 0.05,
-            'bootstrap': False, #全量数据集建树
+            'bootstrap': True,
             'random_state': 666
         }
         self.params_lr = {
@@ -44,7 +44,15 @@ class ECardModel():
         self.score_model = score_card.ScoreCardModel()
 
     def fit(self, df_X, df_Y, validation_X:pd.DataFrame=None, validation_Y:pd.DataFrame=None, sample_weight=None):
-        df_y, df_Y = self.check_label(df_Y)
+        df_Y, df_y, df_y_binary= self.check_label(df_Y)
+        pre_y = np.array([0])
+        validation_idx = False
+        if type(validation_X) != type(None):
+            assert validation_X.shape[0] == validation_Y.shape[0]
+            df_valY, df_valy, df_valy_binary = self.check_label(validation_Y)
+            pre_valy = np.array([0])
+            validation_idx = True
+
         clf_rf = RandomForestClassifier(**self.params_rf)
         clf_rf.fit(df_X, df_y, sample_weight=sample_weight)
         rf_boundaries = rf_bolcks.get_randomforest_blocks(clf_rf,col_name=df_X.columns)
@@ -52,38 +60,37 @@ class ECardModel():
         self.blocks = gl_boundaries
         init_ecard = self.get_init_ecard(df_X,gl_boundaries)
         print("start model fitting ...")
-        pre_y=np.array([0])
-
-        # vlidation part
-        validation_idx = False
-        if type(validation_X) != type(None):
-            assert validation_X.shape[0] == validation_Y.shape[0]
-            df_valy, df_valY = self.check_label(validation_Y)
-            pre_valy = np.array([0])
-            validation_idx=True
-
         for i,tree_bins in enumerate(rf_boundaries):
-            clf_lr = LogisticRegression(**self.params_lr)
             sample_idx = df_X.sample(
                 frac=1.0, replace=True, weights=sample_weight, random_state=i
             ).sample(frac=self.sample_frac, replace=False, random_state=i).index
             df_woe = woe.get_woe_card(df_X.loc[sample_idx], df_Y.loc[sample_idx], tree_bins)
             x = self.get_woe_features(df_X, df_woe, tree_bins)
+            clf_lr = LogisticRegression(**self.params_lr)
             clf_lr.fit(x.loc[sample_idx], df_y.loc[sample_idx], sample_weight=sample_weight.loc[sample_idx])
             clf_lr.col_name=x.columns
             tree_card = self.get_score_card(clf_lr,df_woe)
             self.rf_cards.append(tree_card)
-            pre_y = pre_y + clf_lr.predict_proba(x)[:,1]
+            pre_y = pre_y + clf_lr.predict_proba(x)[:,1:].sum(axis=1)
             cur_pre = (pre_y/(i+1))
-            train_auc = self.score_model.get_auc(cur_pre,df_y, pre_target=1)[0]
+            train_auc = self.score_model.get_auc(cur_pre,df_y_binary, pre_neg_target=0)[0]
+            train_info = "train_auc={}".format(round(train_auc, 4))
+            if ('fee_got' in df_Y.columns) and ('report_fee' in df_Y.columns):
+                train_insurance_auc = \
+                    self.score_model.get_g7_auc(pd.DataFrame(cur_pre), df_Y["fee_got"], df_Y["report_fee"], )[0]
+                train_info = "{}, train_insurance_auc={}".format(train_info, round(train_insurance_auc, 4))
+
             validation_info=None
             if validation_idx:
                 valx = self.get_woe_features(validation_X, df_woe, tree_bins)
-                pre_valy = pre_valy + clf_lr.predict_proba(valx)[:, 1]
+                pre_valy = pre_valy + clf_lr.predict_proba(valx)[:, 1:].sum(axis=1)
                 cur_pre = (pre_valy / (i + 1))
-                val_auc = self.score_model.get_auc(cur_pre, df_valy, pre_target=1)[0]
-                validation_info = "vlidation_auc={}".format(round(val_auc,4))
-            print("sep_{}:\tauc={} {}".format(i+1,round(train_auc,4),validation_info))
+                validation_auc = self.score_model.get_auc(cur_pre, df_valy_binary, pre_neg_target=0)[0]
+                validation_info = "validation_auc={}".format(round(validation_auc, 4))
+                if ('fee_got' in df_valY.columns) and ('report_fee' in df_valY.columns):
+                    validation_insurance_auc = self.score_model.get_g7_auc(pd.DataFrame(cur_pre), df_valY["fee_got"], df_valY["report_fee"], )[0]
+                    validation_info = "{}, validation_insurance_auc={}".format(validation_info,round(validation_insurance_auc,4))
+            print("sep_{}:\t{}\t{}".format(i+1,train_info,validation_info))
         self.score_ecard = self.get_cards_merge(self.rf_cards, init_ecard)
 
     def check_label(self, df_Y):
@@ -92,7 +99,12 @@ class ECardModel():
         if 'label' not in df_Y.columns:
             df_Y['label'] = df_Y.iloc[:,0]
         df_y=df_Y.label
-        return df_y, df_Y
+        if df_y.unique().size>2:
+            df_y_binary = df_y.apply(lambda x: 1 if x>0 else 0)
+        else:
+            df_y_binary = df_y
+        df_Y['label']=df_y_binary
+        return df_Y, df_y, df_y_binary
 
     def get_woe_features(self, df_X,df_card,dict_blocks):
         df_x = pd.DataFrame()
@@ -173,7 +185,6 @@ class ECardModel():
              ['init_model_score', Interval(-np.inf, np.inf, closed='right'), -1]
              ], columns=['field_', 'bins_', 'size_'])
         df_card = df_init_ecard.append(df_base_card, ignore_index=True)
-        print("init ecards done")
         return df_card
 
     def get_importance_(self):
@@ -275,6 +286,7 @@ if __name__ == '__main__':
     df_X = df_train_data[features_col]
     df_Y = df_train_data[['label', 'label_ordinary',
                           'label_serious', 'label_major', 'label_devastating', 'label_8w','fee_got','report_fee']]
+    df_Y['label']=df_Y.apply(lambda x:x['label'] if x["report_fee"]<5000 else 2,axis=1)
     ecard = ECardModel(kwargs_rf={'n_estimators':2})
     ecard.fit(df_X, df_Y,df_X, df_Y,sample_weight=df_Y['label']+1)
     print(ecard.get_importance_())
