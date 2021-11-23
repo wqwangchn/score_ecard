@@ -10,7 +10,7 @@ rm -rf ./pynovice.egg-info
 git push origin --tags
 
 # 2. add tag
-git tag v1.1.1 -m 'init score_ecard'
+git tag v1.1.3 -m 'init score_ecard'
 
 python setup.py sdist bdist_wheel
 python3 -m twine upload --repository-url https://upload.pypi.org/legacy/ dist/*
