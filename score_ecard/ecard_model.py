@@ -67,9 +67,9 @@ class ECardModel():
         rf_boundaries, top_features = rf_bolcks.get_randomforest_blocks(clf_rf,col_name=df_X.columns,topn_feat=self.cross_topn)
         ### start feature ext -------
         if len(top_features)>1:
-            df_X_ext, boundaries_ , boundaries_ext = self.calc_cross_features(top_features, df_X, df_y)
-            df_X = self.get_cross_features(df_X_ext, boundaries_, df_X)
-            validation_X = self.get_cross_features(df_X_ext, boundaries_, validation_X)
+            boundaries_ext = self.calc_cross_features(top_features, df_X, df_y)
+            df_X = self.get_cross_features(df_X)
+            validation_X = self.get_cross_features(validation_X)
         else:
             boundaries_ext={}
         ### ---------- feature ext end
@@ -144,9 +144,9 @@ class ECardModel():
         rf_boundaries, top_features = rf_bolcks.get_randomforest_blocks(clf_rf,col_name=df_X.columns,topn_feat=self.cross_topn)
         ### start feature ext -------
         if len(top_features)>1:
-            df_X_ext, boundaries_, boundaries_ext = self.calc_cross_features(top_features,df_X, df_y)
-            df_X = self.get_cross_features(df_X_ext, boundaries_, df_X)
-            validation_X = self.get_cross_features(df_X_ext, boundaries_, validation_X)
+            boundaries_ext = self.calc_cross_features(top_features,df_X, df_y)
+            df_X = self.get_cross_features(df_X)
+            validation_X = self.get_cross_features(validation_X)
         else:
             boundaries_ext={}
         ### ---------- feature ext end
@@ -357,6 +357,8 @@ class ECardModel():
         :param df_data:
         :return:
         '''
+        if self.cross_topn>1:
+            df_data = self.get_cross_features(df_data)
         df_score = pd.DataFrame()
         df_card = self.score_ecard
         for field_, bin_ in self.blocks.items():
@@ -407,9 +409,12 @@ class ECardModel():
             df_X_ext = df_X_ext.join(df_tmp.set_index('tmp_'),on='tmp_',how='inner')
         if 'tmp_' in df_X_ext.columns:
             del df_X_ext['tmp_']
-        return df_X_ext, boundaries, boundaries_ext
+        self.feature_ext_info = {'df_ext':df_X_ext,'boundaries_ext':boundaries}
+        return boundaries_ext
 
-    def get_cross_features(self, df_X_ext, boundaries_ext, df_data):
+    def get_cross_features(self, df_data):
+        df_X_ext = self.feature_ext_info.get('df_ext')
+        boundaries_ext = self.feature_ext_info.get('boundaries_ext')
         df_X = df_data.copy()
         df_tmp = pd.DataFrame()
         for k,bv in boundaries_ext.items():
