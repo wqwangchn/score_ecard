@@ -23,6 +23,12 @@ import itertools
 
 class ECardModel():
     def __init__(self,kwargs_lr=None, kwargs_rf=None, sample_frac=1.0, cross_topn=0):
+        '''
+        :param kwargs_lr:
+        :param kwargs_rf:
+        :param sample_frac: 样本再抽样比例，样本抽样比例 = 0.6*sample_frac
+        :param cross_topn: 特征交叉层级，可参考参数设置为[2，3]，默认不进行特征扩展即cross_topn=0
+        '''
         self.params_rf = {
             'n_estimators': 100,
             'max_depth': 5,
@@ -52,36 +58,27 @@ class ECardModel():
         if type(sample_weight)==type(None):
             sample_weight=df_y*0+1
         pre_y = np.array([0])
+        clf_rf = RandomForestClassifier(**self.params_rf)
+        clf_rf.fit(df_X, df_y, sample_weight=sample_weight)
+        rf_report = classification_report(df_y, clf_rf.predict(df_X))
+        print('RF-report:','\n',rf_report)
+        rf_boundaries,ext_boundaries = self.get_boundaries(clf_rf, df_X, df_y)
+        if len(ext_boundaries)>0:
+            df_X = self.get_cross_features(df_X)
+
         validation_idx = False
         if type(validation_X) != type(None):
             assert validation_X.shape[0] == validation_Y.shape[0]
             df_valY, df_valy, df_valy_binary = self.check_label(validation_Y)
             pre_valy = np.array([0])
             validation_idx = True
+            if len(ext_boundaries) > 0:
+                validation_X = self.get_cross_features(validation_X)
 
-        clf_rf = RandomForestClassifier(**self.params_rf)
-        clf_rf.fit(df_X, df_y, sample_weight=sample_weight)
-        rf_report = classification_report(df_y, clf_rf.predict(df_X))
-        print('RF-report:','\n',rf_report)
-
-        rf_boundaries, top_features = rf_bolcks.get_randomforest_blocks(clf_rf,col_name=df_X.columns,topn_feat=self.cross_topn)
-        ### start feature ext -------
-        if len(top_features)>1:
-            boundaries_ext = self.calc_cross_features(top_features, df_X, df_y)
-            df_X = self.get_cross_features(df_X)
-            validation_X = self.get_cross_features(validation_X)
-        else:
-            boundaries_ext={}
-        ### ---------- feature ext end
-        gl_boundaries = self.get_boundaries_merge(rf_boundaries,boundaries_ext)
-        self.blocks = gl_boundaries
-        init_ecard = self.get_init_ecard(df_X,gl_boundaries)
+        init_ecard = self.get_init_ecard(df_X)
         print("start model fitting ...")
         for i,tree_bins in enumerate(rf_boundaries):
-            for k,v in boundaries_ext.items():
-                for jj in k[4:].split("-"):
-                    if jj in tree_bins.keys():
-                        tree_bins.update({k:v})
+            tree_bins.update(ext_boundaries)
             sample_idx = df_X.sample(
                 frac=1.0, replace=True, weights=sample_weight, random_state=i
             ).sample(frac=self.sample_frac, replace=False, random_state=i).index
@@ -90,80 +87,6 @@ class ECardModel():
             clf_lr = LogisticRegression(**self.params_lr)
             clf_lr.fit(x.loc[sample_idx], df_y_binary.loc[sample_idx], sample_weight=sample_weight.loc[sample_idx])
             clf_lr.col_name=x.columns
-            tree_card = self.get_score_card(clf_lr,df_woe)
-            self.rf_cards.append(tree_card)
-            pre_y = pre_y + clf_lr.predict_proba(x)[:,1:].sum(axis=1)
-            cur_pre = (pre_y/(i+1))
-            train_auc = self.score_model.get_auc(cur_pre,df_y_binary, pre_target=1)[0]
-            train_info = "train_auc={}".format(round(train_auc, 4))
-            if ('fee_got' in df_Y.columns) and ('report_fee' in df_Y.columns):
-                train_insurance_auc = \
-                    self.score_model.get_g7_auc(pd.DataFrame(cur_pre), df_Y["fee_got"], df_Y["report_fee"], )[0]
-                train_info = "{}, train_insurance_auc={}".format(train_info, round(train_insurance_auc, 4))
-
-            validation_info=None
-            if validation_idx:
-                valx = self.get_woe_features(validation_X, df_woe, tree_bins)
-                pre_valy = pre_valy + clf_lr.predict_proba(valx)[:, 1:].sum(axis=1)
-                cur_pre = (pre_valy / (i + 1))
-                validation_auc = self.score_model.get_auc(cur_pre, df_valy_binary, pre_target=1)[0]
-                validation_info = "validation_auc={}".format(round(validation_auc, 4))
-                if ('fee_got' in df_valY.columns) and ('report_fee' in df_valY.columns):
-                    validation_insurance_auc = self.score_model.get_g7_auc(pd.DataFrame(cur_pre), df_valY["fee_got"], df_valY["report_fee"], )[0]
-                    validation_info = "{}, validation_insurance_auc={}".format(validation_info,round(validation_insurance_auc,4))
-            print("sep_{}:\t{}\t{}".format(i+1,train_info,validation_info))
-        self.score_ecard = self.get_cards_merge(self.rf_cards, init_ecard)
-
-    def fit_debug(self, df_X, df_Y, validation_X:pd.DataFrame=None, validation_Y:pd.DataFrame=None, sample_weight=None):
-        '''
-        1.rf全特征随机样本 - > lr 随机样本随机特征
-        2.特征二维交叉
-        :param df_X:
-        :param df_Y:
-        :param validation_X:
-        :param validation_Y:
-        :param sample_weight:
-        :return:
-        '''
-        df_Y, df_y, df_y_binary= self.check_label(df_Y)
-        if type(sample_weight)==type(None):
-            sample_weight=df_y*0+1
-        pre_y = np.array([0])
-        validation_idx = False
-        if type(validation_X) != type(None):
-            assert validation_X.shape[0] == validation_Y.shape[0]
-            df_valY, df_valy, df_valy_binary = self.check_label(validation_Y)
-            pre_valy = np.array([0])
-            validation_idx = True
-        self.params_rf.update({'max_features': None,'bootstrap': True,})
-        clf_rf = RandomForestClassifier(**self.params_rf)
-        clf_rf.fit(df_X, df_y, sample_weight=sample_weight)
-        rf_report = classification_report(df_y, clf_rf.predict(df_X))
-        print('RF-report:','\n',rf_report)
-
-        rf_boundaries, top_features = rf_bolcks.get_randomforest_blocks(clf_rf,col_name=df_X.columns,topn_feat=self.cross_topn)
-        ### start feature ext -------
-        if len(top_features)>1:
-            boundaries_ext = self.calc_cross_features(top_features,df_X, df_y)
-            df_X = self.get_cross_features(df_X)
-            validation_X = self.get_cross_features(validation_X)
-        else:
-            boundaries_ext={}
-        ### ---------- feature ext end
-        gl_boundaries = self.get_boundaries_merge(rf_boundaries, boundaries_ext)
-        self.blocks = gl_boundaries
-        init_ecard = self.get_init_ecard(df_X,gl_boundaries)
-        print("start model fitting ...")
-        for i,tree_bins in enumerate(rf_boundaries):
-            tree_bins.update(boundaries_ext)
-            sample_idx = df_X.sample(
-                frac=1.0, replace=True, weights=sample_weight, random_state=i
-            ).sample(frac=self.sample_frac, replace=False, random_state=i).index
-            df_woe = woe.get_woe_card(df_X.loc[sample_idx], df_Y.loc[sample_idx], tree_bins)
-            x = self.get_woe_features(df_X, df_woe, tree_bins)
-            clf_lr = LogisticRegression(**self.params_lr)
-            clf_lr.fit(x.loc[sample_idx], df_y_binary.loc[sample_idx], sample_weight=sample_weight.loc[sample_idx])
-            clf_lr.col_name = x.columns
             tree_card = self.get_score_card(clf_lr,df_woe)
             self.rf_cards.append(tree_card)
             pre_y = pre_y + clf_lr.predict_proba(x)[:,1:].sum(axis=1)
@@ -273,10 +196,10 @@ class ECardModel():
                 gl_boundaries.update({k: cv})
             else:
                 gl_boundaries.update({k: v})
-        print("get randomforest boundaries done")
         return gl_boundaries
 
-    def get_init_ecard(self, df_X, gl_boundaries):
+    def get_init_ecard(self, df_X):
+        gl_boundaries = self.blocks
         len_=len(gl_boundaries)
         print("init ecards ...")
         bins_list=[]
@@ -372,28 +295,42 @@ class ECardModel():
         score = df_score.sum(axis=1).apply(lambda x: round(x))
         return score
 
-    def calc_cross_features(self, top_features, df_X, df_y):
-        clf_rf = RandomForestClassifier(
-            n_estimators=1,
-            max_depth=2,
-             max_features=None,
-             bootstrap=False,
-             random_state=666,
-        )
-        clf_rf.fit(df_X[top_features], df_y)
-        rf_boundaries, _ = rf_bolcks.get_randomforest_blocks(clf_rf, col_name=top_features)
-        boundaries = self.get_boundaries_merge(rf_boundaries)
+    def get_boundaries(self, clf_rf, df_X, df_y):
+        rf_boundaries, rf_cross_tuple = rf_bolcks.get_randomforest_blocks(clf_rf,col_name=df_X.columns,topn_feat=self.cross_topn)
+        ext_boundaries = self.calc_cross_features(rf_cross_tuple, df_X, df_y)
+        gl_boundaries = self.get_boundaries_merge(rf_boundaries,ext_boundaries)
+        self.blocks = gl_boundaries
+        return rf_boundaries,ext_boundaries
+
+    def calc_cross_features(self, rf_cross_tuple, df_X, df_y):
+        boundaries = {}
+        for col_ in np.unique(rf_cross_tuple):
+            clf_tree = RandomForestClassifier(
+                n_estimators=1,
+                max_depth=2,
+                max_features=None,
+                bootstrap=False,
+                min_samples_leaf=0.01,
+                random_state=666,
+            )
+            clf_tree.fit(df_X[[col_]], df_y)
+            col_boundaries, _ = rf_bolcks.get_randomforest_blocks(clf_tree, col_name=[col_])
+            col_boundaries = self.get_boundaries_merge(col_boundaries)
+            boundaries.update(col_boundaries)
+
         df_X_ext = pd.DataFrame()
         for k,bv in boundaries.items():
             df_X_ext[k]=pd.cut(df_X[k],bins=bv).astype(str)
         df_X_ext.drop_duplicates(inplace=True)
         df_X_ext.reset_index(drop=True,inplace=True)
 
-        boundaries_ext={}
-        for i,j in itertools.product(boundaries.keys(), boundaries.keys()):
+        boundaries_ext = {}
+        for i,j in [i for item in rf_cross_tuple for i in item]:
             if i==j:
                 continue
             col_='ext-{}-{}'.format(i,j)
+            if col_ in boundaries_ext:
+                continue
             df_tmp = pd.DataFrame(df_X_ext[[i,j]].apply(lambda x: '-'.join(x), axis=1).drop_duplicates())
             df_tmp.columns=['tmp_']
             df_tmp[col_] = range(len(df_tmp))
@@ -457,6 +394,7 @@ if __name__ == '__main__':
     df_Y = df_train_data[['label', 'label_ordinary',
                           'label_serious', 'label_major', 'label_devastating', 'label_8w','fee_got','report_fee']]
     df_Y['label']=df_Y.apply(lambda x:x['label'] if x["report_fee"]<5000 else 2,axis=1)
-    ecard = ECardModel(kwargs_rf={'n_estimators':2})
-    ecard.fit_debug(df_X, df_Y,df_X, df_Y,sample_weight=df_Y['label']+1)
+    ecard = ECardModel(kwargs_rf={'n_estimators':2},cross_topn=2)
+    ecard.fit(df_X, df_Y,df_X, df_Y,sample_weight=df_Y['label']+1)
     print(ecard.get_importance_())
+    print(ecard.predict(df_X))
