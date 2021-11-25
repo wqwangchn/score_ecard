@@ -81,7 +81,14 @@ class ECardModel():
         init_ecard = self.get_init_ecard(df_X, rf_boundaries, ext_boundaries)
         print("start model fitting ...")
         for i,tree_bins in enumerate(rf_boundaries):
-            tree_bins.update(ext_boundaries)
+            for k,v in ext_boundaries.items():
+                idx_ = True
+                for jj in k[4:].split("-"):
+                    if jj not in tree_bins.keys():
+                        idx_ = False
+                        break
+                if idx_:
+                    tree_bins.update({k:v})
             sample_idx = df_X.sample(
                 frac=1.0, replace=True, weights=sample_weight, random_state=i
             ).sample(frac=self.sample_frac, replace=False, random_state=i).index
