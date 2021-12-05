@@ -7,7 +7,7 @@ Email: wqwangchn@163.com
 Date: 2021/11/5 21:51
 Desc:
 '''
-from interval import Interval
+# from interval import Interval
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report
@@ -178,8 +178,8 @@ class ECardModel():
         df_field_card = df_woe[['特征字段', '分箱', '车辆总数', 'model_score']]
         df_field_card.columns = ['field_', 'bins_', 'size_', 'score_']
         df_base_card = pd.DataFrame(
-            [['init_base_score', Interval(-np.inf, np.inf, closed='right'), None, init_score],
-             ['init_model_score', Interval(-np.inf, np.inf, closed='right'), None, base_score]
+            [['init_base_score', pd.Interval(-np.inf, np.inf, closed='right'), None, init_score],
+             ['init_model_score', pd.Interval(-np.inf, np.inf, closed='right'), None, base_score]
              ], columns=['field_', 'bins_', 'size_', 'score_'])
         df_card = df_field_card.append(df_base_card, ignore_index=True)
         return df_card
@@ -188,8 +188,13 @@ class ECardModel():
         df_ecard=init_ecard.copy()
         df_ecard['score_']=0
         df_ecard['bins_str']=df_ecard['bins_'].astype(str)
-        df_init_ecard = df_ecard.groupby(['field_','bins_str','size_'])['bins_'].max()
-        df_ecard = df_ecard.groupby(['field_','bins_str','size_'])['score_'].sum()
+        df_init_ecard = df_ecard.groupby(['field_','bins_str','size_']).agg(
+            {
+                'bins_':lambda x:list(x)[0],
+                'score_':'sum'
+            }
+        )
+        df_ecard = df_init_ecard.score_
         len_ = len(rf_cards)
         for i,tree_card in enumerate(rf_cards):
             progress_bar(i,len_)
@@ -202,8 +207,8 @@ class ECardModel():
             df_icard = icard.groupby(['field_', 'bins_str', 'size_'])['score_'].sum()
             df_ecard+=df_icard/len_
         df_ecard = df_ecard.reset_index()
-        df_ecard['bins_'] = df_init_ecard['bins_']
-        return df_ecard.reset_index()
+        df_ecard['bins_'] = df_init_ecard.reset_index().bins_
+        return df_ecard
 
     def get_boundaries_merge(self, boundaries_list,boundaries_ext={}):
         gl_boundaries={}
@@ -241,8 +246,8 @@ class ECardModel():
             bins_list.append(df_bin)
         df_init_ecard = pd.concat(bins_list).reset_index(drop=True)
         df_base_card = pd.DataFrame(
-            [['init_base_score', Interval(-np.inf, np.inf, closed='right'), -1],
-             ['init_model_score', Interval(-np.inf, np.inf, closed='right'), -1]
+            [['init_base_score', pd.Interval(-np.inf, np.inf, closed='right'), -1],
+             ['init_model_score', pd.Interval(-np.inf, np.inf, closed='right'), -1]
              ], columns=['field_', 'bins_', 'size_'])
         df_card = df_init_ecard.append(df_base_card, ignore_index=True)
         return df_card
@@ -447,6 +452,7 @@ if __name__ == '__main__':
     ecard = ECardModel(kwargs_rf={'n_estimators':2},cross_hierarchy=3, is_best_bagging=True)
     ecard.fit(df_X, df_Y,df_X, df_Y,sample_weight=df_Y['label']+1)
     print(ecard.get_importance_())
+    print(ecard.score_ecard)
     print(ecard.predict(df_X))
     data = {
         'carnum': '皖SF8698',
@@ -525,4 +531,4 @@ if __name__ == '__main__':
          'lr_pre': 0.327752870486023,
          'model1_score': 631
         }
-    print(ecard.get_single_score(data=data, level_threshold=None))
+    print(ecard.get_single_score(data=data, level_threshold=[-np.inf,400,500,550,600,np.inf]))
