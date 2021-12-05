@@ -21,12 +21,13 @@ from score_ecard import score_card
 warnings.filterwarnings('ignore')
 
 class ECardModel():
-    def __init__(self,kwargs_lr=None, kwargs_rf=None, sample_frac=1.0, cross_hierarchy=0):
+    def __init__(self,kwargs_lr=None, kwargs_rf=None, sample_frac=1.0, cross_hierarchy=0, is_best_bagging=False):
         '''
         :param kwargs_lr:
         :param kwargs_rf:
         :param sample_frac: 样本再抽样比例，样本抽样比例 = 0.6*sample_frac
         :param cross_hierarchy: 特征交叉层级，可参考参数设置为[2，3]，默认不进行特征扩展即cross_hierarchy=0
+        :param is_best_bagging:
         '''
         self.params_rf = {
             'n_estimators': 100,
@@ -50,6 +51,7 @@ class ECardModel():
         self.rf_cards = []
         self.sample_frac = sample_frac
         self.cross_hierarchy = cross_hierarchy
+        self.is_best_bagging = is_best_bagging
         self.score_model = score_card.ScoreCardModel()
 
     def fit(self, df_X, df_Y, validation_X:pd.DataFrame=None, validation_Y:pd.DataFrame=None, sample_weight=None):
@@ -80,6 +82,8 @@ class ECardModel():
 
         init_ecard = self.get_init_ecard(df_X, rf_boundaries, ext_boundaries)
         print("start model fitting ...")
+        best_auc = -999
+        best_insurance_auc = -999
         for i,tree_bins in enumerate(rf_boundaries):
             for k,v in ext_boundaries.items():
                 idx_ = True
@@ -98,18 +102,29 @@ class ECardModel():
             clf_lr.fit(x.loc[sample_idx], df_y_binary.loc[sample_idx], sample_weight=sample_weight.loc[sample_idx])
             clf_lr.col_name=x.columns
             tree_card = self.get_score_card(clf_lr,df_woe)
-            self.rf_cards.append(tree_card)
             pre_y = pre_y + clf_lr.predict_proba(x)[:,1:].sum(axis=1)
             cur_pre = (pre_y/(i+1))
             train_auc = self.score_model.get_auc(cur_pre,df_y_binary, pre_target=1)[0]
             train_info = "train_auc={}".format(round(train_auc, 4))
+            if self.is_best_bagging and (train_auc < best_auc):
+                vote = False
+            else:
+                best_auc = train_auc
+                vote = True
             if ('fee_got' in df_Y.columns) and ('report_fee' in df_Y.columns):
                 train_insurance_auc = \
                     self.score_model.get_g7_auc(pd.DataFrame(cur_pre), df_Y["fee_got"], df_Y["report_fee"], )[0]
                 train_info = "{}, train_insurance_auc={}".format(train_info, round(train_insurance_auc, 4))
+                if train_insurance_auc >= best_insurance_auc:
+                    best_insurance_auc = train_insurance_auc
+                    vote = True
+            if vote:
+                self.rf_cards.append(tree_card)
+            else:
+                pre_y = pre_y - clf_lr.predict_proba(x)[:,1:].sum(axis=1)
 
             validation_info=None
-            if validation_idx:
+            if validation_idx and vote:
                 valx = self.get_woe_features(validation_X, df_woe, tree_bins)
                 pre_valy = pre_valy + clf_lr.predict_proba(valx)[:, 1:].sum(axis=1)
                 cur_pre = (pre_valy / (i + 1))
@@ -172,8 +187,9 @@ class ECardModel():
     def get_cards_merge(self, rf_cards, init_ecard):
         df_ecard=init_ecard.copy()
         df_ecard['score_']=0
-        df_ecard['bins_']=df_ecard['bins_'].astype(str)
-        df_ecard = df_ecard.groupby(['field_','bins_','size_'])['score_'].sum()
+        df_ecard['bins_str']=df_ecard['bins_'].astype(str)
+        df_init_ecard = df_ecard.groupby(['field_','bins_str','size_'])['bins_'].max()
+        df_ecard = df_ecard.groupby(['field_','bins_str','size_'])['score_'].sum()
         len_ = len(rf_cards)
         for i,tree_card in enumerate(rf_cards):
             progress_bar(i,len_)
@@ -182,9 +198,11 @@ class ECardModel():
             idx = icard.apply(
                 lambda x: True if str(x['bins__']) != 'nan' and (x['bins_'].overlaps(x['bins__'])) else False, axis=1)
             icard.loc[~idx, 'score_'] = 0
-            icard['bins_']=icard['bins_'].astype(str)
-            df_icard = icard.groupby(['field_', 'bins_', 'size_'])['score_'].sum()
+            icard['bins_str']=icard['bins_'].astype(str)
+            df_icard = icard.groupby(['field_', 'bins_str', 'size_'])['score_'].sum()
             df_ecard+=df_icard/len_
+        df_ecard = df_ecard.reset_index()
+        df_ecard['bins_'] = df_init_ecard['bins_']
         return df_ecard.reset_index()
 
     def get_boundaries_merge(self, boundaries_list,boundaries_ext={}):
@@ -247,8 +265,24 @@ class ECardModel():
         df_score = self.get_batch_score(df_data)
         return df_score
 
+    def get_ext_features(self, data):
+        if hasattr(self, 'feature_ext_info'):
+            df_ext = self.feature_ext_info.get("df_ext")
+            ext_columns = [i for i in df_ext.columns if 'ext-' in i]
+            for i in ext_columns:
+                colinfo = str(i).split('-')
+                if 'ext' == colinfo[0]:
+                    idx_equ = True
+                    for icol in colinfo[1:]:
+                        if icol not in df_ext.columns:
+                            break
+                        idx_equ = idx_equ & df_ext[icol].apply(lambda x: data.get(icol) in x)
+                    data.update({i: df_ext.loc[idx_equ, i].values[0]})
+        return data
+
     # 单车详细评分
     def get_single_score(self, data: dict, level_threshold=None):
+        data = self.get_ext_features(data)
         score = 0
         score_detail = {}
         df_card = self.score_ecard
@@ -256,7 +290,7 @@ class ECardModel():
             field_ = row['field_']
             bins_ = row['bins_']
             score_ = row['score_']
-            class_ = row['class_']
+            # class_ = row['class_']
             if field_ in ['init_base_score', 'init_model_score']:
                 v = 0
             else:
@@ -271,7 +305,7 @@ class ECardModel():
                 v = 0
             if v in bins_:
                 score = score + score_
-                score_detail[field_] = class_
+                # score_detail[field_] = class_
             else:
                 pass
 
@@ -309,7 +343,7 @@ class ECardModel():
     def calc_cross_boundaries(self, df_X, df_y, sample_weight):
         clf_tree = RandomForestClassifier(
             n_estimators=1,
-            max_depth=5,
+            max_depth=20,
             max_features=None,
             bootstrap=False,
             min_samples_leaf=0.01,
@@ -336,7 +370,7 @@ class ECardModel():
 
         df_X_ext = pd.DataFrame()
         for k,bv in boundaries.items():
-            df_X_ext[k]=pd.cut(df_X[k],bins=bv).astype(str)
+            df_X_ext[k]=pd.cut(df_X[k],bins=bv)
         df_X_ext.drop_duplicates(inplace=True)
         df_X_ext.reset_index(drop=True,inplace=True)
 
@@ -347,7 +381,7 @@ class ECardModel():
             col_='ext-{}-{}'.format(i,j)
             if col_ in ext_boundaries:
                 continue
-            df_tmp = pd.DataFrame(df_X_ext[[i,j]].apply(lambda x: '-'.join(x), axis=1).drop_duplicates())
+            df_tmp = pd.DataFrame(df_X_ext[[i,j]].astype(str).apply(lambda x: '-'.join(x), axis=1).drop_duplicates())
             df_tmp.columns=['tmp_']
             df_tmp[col_] = range(len(df_tmp))
             if len(df_tmp)<2:
@@ -358,7 +392,7 @@ class ECardModel():
                 boundaries_i[0] = -np.inf
                 boundaries_i[-1] = np.inf
             ext_boundaries.update({col_:boundaries_i})
-            df_X_ext['tmp_'] = df_X_ext[[i,j]].apply(lambda x: '-'.join(x), axis=1)
+            df_X_ext['tmp_'] = df_X_ext[[i,j]].astype(str).apply(lambda x: '-'.join(x), axis=1)
             df_X_ext = df_X_ext.join(df_tmp.set_index('tmp_'),on='tmp_',how='inner')
         if 'tmp_' in df_X_ext.columns:
             del df_X_ext['tmp_']
@@ -377,7 +411,7 @@ class ECardModel():
                 continue
             col_ = icol[4:].split('-')
             df_tmp['tmp_'] = df_tmp[col_].apply(lambda x: '-'.join(x), axis=1)
-            df_X_ext['tmp_'] = df_X_ext[col_].apply(lambda x: '-'.join(x), axis=1)
+            df_X_ext['tmp_'] = df_X_ext[col_].astype(str).apply(lambda x: '-'.join(x), axis=1)
             df_ext_tmp = df_X_ext[['tmp_',icol]].drop_duplicates()
             df_tval = df_tmp.join(df_ext_tmp.set_index('tmp_'),on='tmp_',how='inner')[icol]
             assert len(df_tval)==len(df_X), (len(df_tval),len(df_X))
@@ -410,7 +444,85 @@ if __name__ == '__main__':
     df_Y = df_train_data[['label', 'label_ordinary',
                           'label_serious', 'label_major', 'label_devastating', 'label_8w','fee_got','report_fee']]
     df_Y['label']=df_Y.apply(lambda x:x['label'] if x["report_fee"]<5000 else 2,axis=1)
-    ecard = ECardModel(kwargs_rf={'n_estimators':2},cross_hierarchy=3)
+    ecard = ECardModel(kwargs_rf={'n_estimators':2},cross_hierarchy=3, is_best_bagging=True)
     ecard.fit(df_X, df_Y,df_X, df_Y,sample_weight=df_Y['label']+1)
     print(ecard.get_importance_())
     print(ecard.predict(df_X))
+    data = {
+        'carnum': '皖SF8698',
+         'trip_cnt': 90.0,
+         'run_meters': 33469500.089999996,
+         'run_seconds': 866187.0,
+         'trip_avg_meters': 371883.3343333333,
+         'trip_avg_seconds': 9624.3,
+         'trip_avg_distance': 193177.38888888888,
+         'high_meters_ratio': 0.8559960505224269,
+         'province_meters_ratio': 0.014080034620558924,
+         'high_trip_cnt_ratio': 0.7666666666666667,
+         'province_trip_cnt_ratio': 0.03333333333333333,
+         'curvature_g2_trip_meters_ratio': 0.3860073136813918,
+         'ng_23_6_seconds_ratio': 0.0823170978091336,
+         'ng_23_6_trip_cnt_ratio': 0.14444444444444443,
+         'daily_run_kmeters': 0.14444444444444443,
+         'daily_run_hours': 5.423234261889526,
+         'daily_trip_cnt': 2.0285780101204547,
+         'daily_nohigh_kmeters': 108.63576649126179,
+         'daily_ng_23_6_hours': 0.44642490517780453,
+         'trip_long_cnt_ratio': 0.2222222222222222,
+         'day_high_meters_ratio': 0.4270326656080033,
+         'ng_province_meters_ratio': 0.004463795383804909,
+         'morn_6_10_seconds_ratio': 0.22645225569074576,
+         'dusk_17_20_seconds_ratio': 0.26537572140888743,
+         'ng_23_6_avg_speed': 136.96548225856216,
+         'morn_6_10_avg_speed': 119.05333979097628,
+         'dusk_17_20_avg_speed': 143.4565817501577,
+         'low_speed_seconds_ratio': 0.12923537296218945,
+         'low_speed_block_cnt_ratio': 0.06950028719126938,
+         'week_1_5_seconds_ratio': 0.2588990599027693,
+         'geohash4_top10_meters_ratio': 0.32584831893735033,
+         'trip_r30m_cnt_ratio': 0.7211538461538461,
+         'common_line_top30_cnt_ratio': 0.1,
+         'triggertime': '2021-04-04 14:49:42',
+         'triggertime_end': '2021-06-27  00:16:22',
+         'ratio_meitan': 0.004785206867784571,
+         'ratio_gangtie': 0.07997876021761313,
+         'ratio_nonglinmufu': 0.5200959760919361,
+         'ratio_shashi': 0.13649491967093144,
+         'ratio_kuaidi': 0.09816298966354879,
+         'ratio_jiadian': 0.045777212715108415,
+         'ratio_fengdian': 0.0,
+         'ratio_other': 0.0,
+         'ratio_jixie': 0.11433135879828957,
+         'ratio_qiche': 0.0003735759747879492,
+         'card_score': 631,
+         'card_level': 1,
+         'hangye': '农林',
+         'model_version': 'card_V2.1',
+         'tag': '白中白',
+         'source': 10.0,
+         'score': 0.0,
+         'truckno': 0,
+         'pred': 0,
+         'if_liuan': 0,
+         'anhui_mileage_province_rate': 0.17674700919024314,
+         'jiangsu_mileage_province_rate': 0.027259005588571722,
+         'guangdong_mileage_province_rate': 0.0,
+         'montainu_rate': 0.00022354681067481965,
+         'car_got': 1.0,
+         'report_num': 0,
+         'report_fee': 0.0,
+         'train_test_split_rand_value': 0.0512,
+         'train_test_idx': 'train',
+         'fee_got': 15000.0,
+         'label': 0,
+         'label_ordinary': 0,
+         'label_serious': 0,
+         'label_major': 0,
+         'label_devastating': 0,
+         'label_10w': 0,
+         'label_8w': 0,
+         'label_5w': 0,
+         'lr_pre': 0.327752870486023,
+         'model1_score': 631
+        }
+    print(ecard.get_single_score(data=data, level_threshold=None))
