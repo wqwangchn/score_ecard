@@ -310,18 +310,19 @@ class ECardModel():
                 v = 0
             if v in bins_:
                 score = score + score_
-                # score_detail[field_] = class_
+                score_detail[field_] = score_
             else:
                 pass
 
         # level
+        score = round(score)
         level = -1
         total_meters = data.get('run_meters', 0)
         total_seconds = data.get('run_seconds', 0)
         if (level_threshold is not None) and (total_meters >= 2000000) and (total_seconds >= 10 * 3600):
-            level = np.argwhere(np.sort(level_threshold + [score]) == score)[0][0]
+            level = np.argwhere(np.sort(level_threshold + [score]) == score).min()
 
-        out = {'score': round(score), 'level': level, 'score_detail': score_detail}
+        out = {'score': score, 'level': level, 'score_detail': score_detail}
         return out
 
     def get_batch_score(self, df_data: pd.DataFrame):
@@ -452,7 +453,7 @@ if __name__ == '__main__':
     ecard = ECardModel(kwargs_rf={'n_estimators':2},cross_hierarchy=3, is_best_bagging=True)
     ecard.fit(df_X, df_Y,df_X, df_Y,sample_weight=df_Y['label']+1)
     print(ecard.get_importance_())
-    print(ecard.score_ecard)
+    print(ecard.score_ecard.sort_values('bins_str'))
     print(ecard.predict(df_X))
     data = {
         'carnum': '皖SF8698',
