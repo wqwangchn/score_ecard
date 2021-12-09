@@ -326,7 +326,7 @@ class ECardModel():
     def get_ext_features(self, data):
         if hasattr(self, 'feature_ext_info'):
             df_ext = self.feature_ext_info.get("df_ext")
-            if not(df_ext):
+            if type(df_ext)!=pd.DataFrame:
                 return data
             if len(df_ext)<1:
                 return data
@@ -338,7 +338,7 @@ class ECardModel():
                     for icol in colinfo[1:]:
                         if icol not in df_ext.columns:
                             break
-                        idx_equ = idx_equ & df_ext[icol].apply(lambda x: data.get(icol) in x)
+                        idx_equ = idx_equ & df_ext[icol].apply(lambda x: data.get(icol) in x).astype(int)
                     data.update({i: df_ext.loc[idx_equ, i].values[0]})
         return data
 
