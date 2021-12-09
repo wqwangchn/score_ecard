@@ -8,27 +8,44 @@ Date: 2021/11/5 21:51
 Desc:
 '''
 # from interval import Interval
-from sklearn.ensemble import RandomForestClassifier
+
+
+import numpy as np
+import pandas as pd
+import itertools
 from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
+from xgboost import XGBClassifier
+
+from score_ecard import score_card
 from score_ecard.features import randomforest_blocks as rf_bolcks
+from score_ecard.features import xgboost_blocks as xgb_bolcks
 from score_ecard.features import layered_woe as woe
 from util import progress_bar, get_weighted_std
-import pandas as pd
-import numpy as np
 import warnings
-from score_ecard import score_card
 warnings.filterwarnings('ignore')
 
 class ECardModel():
-    def __init__(self,kwargs_lr=None, kwargs_rf=None, sample_frac=1.0, cross_hierarchy=0, is_best_bagging=False):
+    def __init__(self,kwargs_lr=None, features_model='rf', kwargs_rf=None, kwargs_xgb=None, sample_frac=1.0,
+                 cross_hierarchy=0, is_best_bagging=False):
         '''
+
         :param kwargs_lr:
+        :param features_model:
         :param kwargs_rf:
+        :param kwargs_xgb:
         :param sample_frac: 样本再抽样比例，样本抽样比例 = 0.6*sample_frac
         :param cross_hierarchy: 特征交叉层级，可参考参数设置为[2，3]，默认不进行特征扩展即cross_hierarchy=0
         :param is_best_bagging:
         '''
+        self.params_lr = {
+            "class_weight": 'balanced',
+            "penalty": 'l1',
+            "C": 0.2,
+            "solver": 'liblinear'
+        }
         self.params_rf = {
             'n_estimators': 100,
             'max_depth': 5,
@@ -38,61 +55,74 @@ class ECardModel():
             'class_weight': "balanced",
             'random_state': 666
         }
-        self.params_lr = {
-            "class_weight": 'balanced',
-            "penalty": 'l1',
-            "C": 0.2,
-            "solver": 'liblinear'
+        self.params_xgb = {
+            'n_estimators': 10,
+            'max_depth':5,
+            'eta': 0.3,
+            'min_child_weight': 1,
+            'gamma': 0.3,
+            'subsample': 0.8,
+            'colsample_bytree': 0.8,
+            'booster': 'gbtree',
+            'objective': 'binary:logistic',
+            'scale_pos_weight': 1,
+            'lambda': 1,
+            'seed':666,
+            'silent': 0,
+            'eval_metric': 'auc'
         }
-        if kwargs_rf:
-            self.params_rf.update(**kwargs_rf)
+        self.params_base_tree = {
+            'max_depth': 10,
+            'max_features': None,
+            'min_samples_leaf': 0.01,
+            'class_weight': "balanced",
+            'random_state': 666
+        }
         if kwargs_lr:
             self.params_lr.update(**kwargs_lr)
-        self.rf_cards = []
+        if kwargs_rf:
+            self.params_rf.update(**kwargs_rf)
+        if kwargs_xgb:
+            self.params_xgb.update(**kwargs_xgb)
+        self.features_model = features_model
         self.sample_frac = sample_frac
         self.cross_hierarchy = cross_hierarchy
         self.is_best_bagging = is_best_bagging
+
+        self.trees_cards = []
+        self.feature_ext_info = {}
         self.score_model = score_card.ScoreCardModel()
 
     def fit(self, df_X, df_Y, validation_X:pd.DataFrame=None, validation_Y:pd.DataFrame=None, sample_weight=None):
+        assert df_X.shape[0] == df_Y.shape[0]
         df_Y, df_y, df_y_binary= self.check_label(df_Y)
         if type(sample_weight)==type(None):
             sample_weight=df_y*0+1
+
         validation_idx = False
         if type(validation_X) != type(None):
             assert validation_X.shape[0] == validation_Y.shape[0]
             df_valY, df_valy, df_valy_binary = self.check_label(validation_Y)
-            pre_valy = np.array([0])
             validation_idx = True
 
-        pre_y = np.array([0])
-        clf_rf = RandomForestClassifier(**self.params_rf)
-        clf_rf.fit(df_X, df_y, sample_weight=sample_weight)
-        rf_report = classification_report(df_y, clf_rf.predict(df_X))
-        print('RF-report:','\n',rf_report)
-
-        rf_boundaries, _ = rf_bolcks.get_randomforest_blocks(clf_rf, col_name=df_X.columns)
-        if self.cross_hierarchy>1:
-            ext_boundaries = self.calc_cross_boundaries(df_X,df_y,sample_weight)
-        else:
-            ext_boundaries = {}
-        if len(ext_boundaries)>0:
-            df_X = self.get_cross_features(df_X)
+        base_card, base_bins = self.get_base_card(df_X, df_Y, df_y, df_y_binary, sample_weight)
+        self.trees_cards.append(base_card)
+        base_score = self.get_batch_score(df_X, base_card, base_bins)
+        pre_y = base_score.apply(lambda x: self.score_model.score_to_probability(x))
+        df_X = self.get_cross_features(df_X)
+        if validation_idx:
+            base_score = self.get_batch_score(validation_X, base_card, base_bins)
+            pre_valy = base_score.apply(lambda x: self.score_model.score_to_probability(x))
             validation_X = self.get_cross_features(validation_X)
 
-        init_ecard = self.get_init_ecard(df_X, rf_boundaries, ext_boundaries)
+        ml_boundaries = self.get_ml_boundaries(df_X, df_y, sample_weight=sample_weight)
+        base_boundaries = [base_bins]
+        init_ecard = self.get_init_ecard(df_X, base_boundaries, ml_boundaries)
+
         print("start model fitting ...")
         best_auc = -999
         best_insurance_auc = -999
-        for i,tree_bins in enumerate(rf_boundaries):
-            for k,v in ext_boundaries.items():
-                idx_ = True
-                for jj in k[4:].split("-"):
-                    if jj not in tree_bins.keys():
-                        idx_ = False
-                        break
-                if idx_:
-                    tree_bins.update({k:v})
+        for i,tree_bins in enumerate(base_boundaries+ml_boundaries):
             sample_idx = df_X.sample(
                 frac=1.0, replace=True, weights=sample_weight, random_state=i
             ).sample(frac=self.sample_frac, replace=False, random_state=i).index
@@ -119,7 +149,7 @@ class ECardModel():
                     best_insurance_auc = train_insurance_auc
                     vote = True
             if vote:
-                self.rf_cards.append(tree_card)
+                self.trees_cards.append(tree_card)
             else:
                 pre_y = pre_y - clf_lr.predict_proba(x)[:,1:].sum(axis=1)
 
@@ -134,7 +164,7 @@ class ECardModel():
                     validation_insurance_auc = self.score_model.get_g7_auc(pd.DataFrame(cur_pre), df_valY["fee_got"], df_valY["report_fee"], )[0]
                     validation_info = "{}, validation_insurance_auc={}".format(validation_info,round(validation_insurance_auc,4))
             print("sep_{}:\t{}\t{}".format(i+1,train_info,validation_info))
-        self.score_ecard = self.get_cards_merge(self.rf_cards, init_ecard)
+        self.score_ecard = self.get_cards_merge(self.trees_cards, init_ecard)
 
     def check_label(self, df_label):
         df_Y=df_label.copy()
@@ -153,6 +183,26 @@ class ECardModel():
             df_y_binary = df_Y["label_binary"]
         ## ---end
         return df_Y, df_y, df_y_binary
+
+    def get_base_card(self,df_X, df_Y, df_y, df_y_binary, sample_weight):
+        clf_base_tree = DecisionTreeClassifier(**self.params_base_tree)
+        clf_base_tree.fit(df_X, df_y, sample_weight=sample_weight)
+        if hasattr(clf_base_tree, 'estimators_'):
+            pass
+        else:
+            clf_base_tree.estimators_ = [clf_base_tree]
+        tree_boundaries, cross_fields_boundaries = rf_bolcks.get_randomforest_blocks(clf_base_tree, col_name=df_X.columns, cross_hierarchy=self.cross_hierarchy)
+        tree_bins, cross_fields_bins = tree_boundaries[0], cross_fields_boundaries[0]
+        df_woe = woe.get_woe_card(df_X, df_Y, tree_bins)
+        x = self.get_woe_features(df_X, df_woe, tree_bins)
+        clf_lr = LogisticRegression(**self.params_lr)
+        clf_lr.fit(x, df_y_binary, sample_weight=sample_weight)
+        clf_lr.col_name = x.columns
+        tree_card = self.get_score_card(clf_lr, df_woe)
+
+        if len(cross_fields_bins)>1:
+            self.calc_cross_boundaries(cross_fields_bins)
+        return tree_card, tree_bins
 
     def get_woe_features(self, df_X,df_card,dict_blocks):
         df_x = pd.DataFrame()
@@ -184,7 +234,7 @@ class ECardModel():
         df_card = df_field_card.append(df_base_card, ignore_index=True)
         return df_card
 
-    def get_cards_merge(self, rf_cards, init_ecard):
+    def get_cards_merge(self, ml_cards, init_ecard):
         df_ecard=init_ecard.copy()
         df_ecard['score_']=0
         df_ecard['bins_str']=df_ecard['bins_'].astype(str)
@@ -195,8 +245,8 @@ class ECardModel():
             }
         )
         df_ecard = df_init_ecard.score_
-        len_ = len(rf_cards)
-        for i,tree_card in enumerate(rf_cards):
+        len_ = len(ml_cards)
+        for i,tree_card in enumerate(ml_cards):
             progress_bar(i,len_)
             icard = init_ecard.join(tree_card.set_index('field_')[['bins_', 'score_']], on='field_', how='left',
                                     rsuffix='_')
@@ -210,9 +260,9 @@ class ECardModel():
         df_ecard['bins_'] = df_init_ecard.reset_index().bins_
         return df_ecard
 
-    def get_boundaries_merge(self, boundaries_list,boundaries_ext={}):
+    def get_boundaries_merge(self, base_boundaries, ext_boundaries):
         gl_boundaries={}
-        for boundaries in boundaries_list:
+        for boundaries in base_boundaries:
             for k,v in boundaries.items():
                 if k in gl_boundaries:
                     lv = gl_boundaries.get(k)
@@ -221,18 +271,19 @@ class ECardModel():
                     gl_boundaries.update({k:cv})
                 else:
                     gl_boundaries.update({k: v})
-        for k, v in boundaries_ext.items():
-            if k in gl_boundaries:
-                lv = gl_boundaries.get(k)
-                cv = list(set(v + lv))
-                cv.sort()
-                gl_boundaries.update({k: cv})
-            else:
-                gl_boundaries.update({k: v})
+        for boundaries in ext_boundaries:
+            for k,v in boundaries.items():
+                if k in gl_boundaries:
+                    lv = gl_boundaries.get(k)
+                    cv = list(set(v+lv))
+                    cv.sort()
+                    gl_boundaries.update({k:cv})
+                else:
+                    gl_boundaries.update({k: v})
         return gl_boundaries
 
-    def get_init_ecard(self, df_X, rf_boundaries, ext_boundaries):
-        gl_boundaries = self.get_boundaries_merge(rf_boundaries, ext_boundaries)
+    def get_init_ecard(self, df_X, base_boundaries, ml_boundaries):
+        gl_boundaries = self.get_boundaries_merge(base_boundaries, ml_boundaries)
         self.blocks = gl_boundaries
         len_=len(gl_boundaries)
         print("init ecards ...")
@@ -267,12 +318,18 @@ class ECardModel():
         return df_proba
 
     def predict(self, df_data):
-        df_score = self.get_batch_score(df_data)
+        if self.cross_hierarchy>1:
+            df_data = self.get_cross_features(df_data)
+        df_score = self.get_batch_score(df_data, self.score_ecard, self.blocks)
         return df_score
 
     def get_ext_features(self, data):
         if hasattr(self, 'feature_ext_info'):
             df_ext = self.feature_ext_info.get("df_ext")
+            if not(df_ext):
+                return data
+            if len(df_ext)<1:
+                return data
             ext_columns = [i for i in df_ext.columns if 'ext-' in i]
             for i in ext_columns:
                 colinfo = str(i).split('-')
@@ -325,17 +382,14 @@ class ECardModel():
         out = {'score': score, 'level': level, 'score_detail': score_detail}
         return out
 
-    def get_batch_score(self, df_data: pd.DataFrame):
+    def get_batch_score(self,df_data: pd.DataFrame, df_card, blocks):
         '''
         ## 批量查询
         :param df_data:
         :return:
         '''
-        if self.cross_hierarchy>1:
-            df_data = self.get_cross_features(df_data)
         df_score = pd.DataFrame()
-        df_card = self.score_ecard
-        for field_, bin_ in self.blocks.items():
+        for field_, bin_ in blocks.items():
             _card = df_card[df_card.field_ == field_]
             _card["bins_"] = _card.bins_.astype(str)
             _data = pd.cut(df_data[field_].fillna(0), bins=bin_).astype(str)
@@ -346,68 +400,44 @@ class ECardModel():
         score = df_score.sum(axis=1).apply(lambda x: round(x))
         return score
 
-    def calc_cross_boundaries(self, df_X, df_y, sample_weight):
-        clf_tree = RandomForestClassifier(
-            n_estimators=1,
-            max_depth=20,
-            max_features=None,
-            bootstrap=False,
-            min_samples_leaf=0.01,
-            random_state=666,
-        )
-        clf_tree.fit(df_X, df_y, sample_weight=sample_weight)
-        _, rf_cross_tuple = rf_bolcks.get_randomforest_blocks(clf_tree, col_name=df_X.columns,
-                                                              topn_feat=self.cross_hierarchy)
+    def calc_cross_boundaries(self, boundaries):
+        '''
 
-        boundaries = {}
-        for col_ in np.unique(rf_cross_tuple):
-            clf_tree = RandomForestClassifier(
-                n_estimators=1,
-                max_depth=2,
-                max_features=None,
-                bootstrap=False,
-                min_samples_leaf=0.01,
-                random_state=666,
-            )
-            clf_tree.fit(df_X[[col_]], df_y)
-            col_boundaries, _ = rf_bolcks.get_randomforest_blocks(clf_tree, col_name=[col_])
-            col_boundaries = self.get_boundaries_merge(col_boundaries)
-            boundaries.update(col_boundaries)
+        :param boundaries: 默认按重要度由大到小排序的字段分箱
+        :return:
+        '''
+        df_ext = pd.DataFrame(columns=['id_'])
+        for col_, bins_ in boundaries.items():
+            df_tmp = pd.cut([], bins=bins_).value_counts().sort_index().reset_index().rename(
+                columns={'index': col_, 0: 'id_'})
+            df_ext = df_ext.merge(df_tmp, how='outer', on='id_')
+        df_ext['id_'] = range(len(df_ext))
 
-        df_X_ext = pd.DataFrame()
-        for k,bv in boundaries.items():
-            df_X_ext[k]=pd.cut(df_X[k],bins=bv)
-        df_X_ext.drop_duplicates(inplace=True)
-        df_X_ext.reset_index(drop=True,inplace=True)
-
-        ext_boundaries = {}
-        for i,j in [i for item in rf_cross_tuple for i in item]:
+        for i, j in itertools.product(boundaries.keys(), boundaries.keys()):
             if i==j:
                 continue
-            col_='ext-{}-{}'.format(i,j)
-            if col_ in ext_boundaries:
+            if i not in df_ext.columns:
                 continue
-            df_tmp = pd.DataFrame(df_X_ext[[i,j]].astype(str).apply(lambda x: '-'.join(x), axis=1).drop_duplicates())
+            if j not in df_ext.columns:
+                continue
+            col_='ext-{}-{}'.format(i,j)
+
+            df_tmp = pd.DataFrame(df_ext[[i,j]].astype(str).apply(lambda x: '-'.join(x), axis=1).drop_duplicates())
             df_tmp.columns=['tmp_']
             df_tmp[col_] = range(len(df_tmp))
-            if len(df_tmp)<2:
-                boundaries_i = [-np.inf,np.inf]
-            else:
-                boundaries_i = np.array(range(len(df_tmp)))
-                boundaries_i = list((boundaries_i[:-1]+boundaries_i[1:])/2)
-                boundaries_i[0] = -np.inf
-                boundaries_i[-1] = np.inf
-            ext_boundaries.update({col_:boundaries_i})
-            df_X_ext['tmp_'] = df_X_ext[[i,j]].astype(str).apply(lambda x: '-'.join(x), axis=1)
-            df_X_ext = df_X_ext.join(df_tmp.set_index('tmp_'),on='tmp_',how='inner')
-        if 'tmp_' in df_X_ext.columns:
-            del df_X_ext['tmp_']
-        self.feature_ext_info = {'df_ext':df_X_ext,'boundaries_ext':boundaries}
-        return ext_boundaries
+            df_ext['tmp_'] = df_ext[[i,j]].astype(str).apply(lambda x: '-'.join(x), axis=1)
+            df_ext = df_ext.join(df_tmp.set_index('tmp_'),on='tmp_',how='inner')
+        if 'tmp_' in df_ext.columns:
+            del df_ext['tmp_']
+        self.feature_ext_info = {'df_ext':df_ext,'boundaries_ext':boundaries}
 
     def get_cross_features(self, df_data):
         df_X_ext = self.feature_ext_info.get('df_ext')
         boundaries_ext = self.feature_ext_info.get('boundaries_ext')
+        if not(boundaries_ext):
+            return df_data
+        if len(boundaries_ext)<2:
+            return df_data
         df_X = df_data.copy()
         df_tmp = pd.DataFrame()
         for k,bv in boundaries_ext.items():
@@ -424,12 +454,27 @@ class ECardModel():
             df_X[icol] = df_tval
         return df_X
 
+    def get_ml_boundaries(self, df_X, df_y, sample_weight):
+        if self.features_model =='rf':
+            clf_rf = RandomForestClassifier(**self.params_rf)
+            clf_rf.fit(df_X, df_y, sample_weight=sample_weight)
+            rf_report = classification_report(df_y, clf_rf.predict(df_X))
+            print('RF-report:', '\n', rf_report)
+            rf_boundaries, _ = rf_bolcks.get_randomforest_blocks(clf_rf, col_name=df_X.columns)
+            return rf_boundaries
+        if self.features_model =='xgb':
+            clf_xgb = XGBClassifier(**self.params_xgb)
+            clf_xgb.fit(df_X, df_y, sample_weight=sample_weight)
+            xgb_report = classification_report(df_y, clf_xgb.predict(df_X))
+            print('XGB-report:', '\n', xgb_report)
+            xgb_boundaries = xgb_bolcks.get_xgboost_blocks(clf_xgb, col_name=df_X.columns)
+            return xgb_boundaries
 
 
 if __name__ == '__main__':
     df_valid = pd.read_csv("data/train_test_data.csv")
-    df_train_data = df_valid[df_valid['train_test_tag'] == '训练集']
-    df_test_data = df_valid[df_valid['train_test_tag'] == '测试集']
+    df_train_data = df_valid[df_valid['train_test_tag'] == '训练集'].head(1000)
+    df_test_data = df_valid[df_valid['train_test_tag'] == '测试集'].head(1000)
     features_col = ['trip_avg_meters',
                     'trip_avg_seconds', 'trip_avg_distance', 'high_meters_ratio',
                     'province_meters_ratio', 'high_trip_cnt_ratio',
@@ -450,13 +495,13 @@ if __name__ == '__main__':
     df_Y = df_train_data[['label', 'label_ordinary',
                           'label_serious', 'label_major', 'label_devastating', 'label_8w','fee_got','report_fee']]
     df_Y['label']=df_Y.apply(lambda x:x['label'] if x["report_fee"]<5000 else 2,axis=1)
-    ecard = ECardModel(kwargs_rf={'n_estimators':2},cross_hierarchy=3, is_best_bagging=True)
+    ecard = ECardModel(kwargs_rf={'n_estimators':2},kwargs_xgb={'n_estimators':2},cross_hierarchy=3, is_best_bagging=True,    features_model='xgb')
     ecard.fit(df_X, df_Y,df_X, df_Y,sample_weight=df_Y['label']+1)
     print(ecard.get_importance_())
     print(ecard.score_ecard.sort_values('bins_str'))
     print(ecard.predict(df_X))
     data = {
-        'carnum': '皖SF8698',
+        'carnum': 'dfafafaf',
          'trip_cnt': 90.0,
          'run_meters': 33469500.089999996,
          'run_seconds': 866187.0,
@@ -532,4 +577,4 @@ if __name__ == '__main__':
          'lr_pre': 0.327752870486023,
          'model1_score': 631
         }
-    print(ecard.get_single_score(data=data, level_threshold=[-np.inf,400,500,550,600,np.inf]))
+    print(ecard.get_single_score(data=data, level_threshold=[-np.inf,400,519,550,600,np.inf]))

@@ -11,7 +11,7 @@ venv/
 *.xlsx
 build
 dist
-pynovice.egg-info
+score_ecard.egg-info
 .DS_Store
 RELEASE-VERSION
 score_ecard/data/

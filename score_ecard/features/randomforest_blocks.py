@@ -9,18 +9,20 @@ Desc:
 '''
 
 import numpy as np
+from collections import OrderedDict
 
-def get_randomforest_blocks(clf_rf, col_name=None, topn_feat=0, valid_feature_prob=1.0):
+def get_randomforest_blocks(clf_rf, col_name=None, valid_feature_prob=1.0, cross_hierarchy=0):
     '''
     利用随机森林获得最优分箱的边界值列表
     :param clf_rf:
     :param col_name:
-    :param topn_feat: 各决策树内重要的特征比例
     :param valid_feature_prob: 选择随机森林有效特征的比例，剔除低重要度特征，建议在0.85~1.0
+    :param cross_hierarchy: 各决策树内进行特征交叉的层深
     :return:
+    rf_cross_boundary: 各决策树的前n层特征及boundary，用来特征交叉
     '''
     rf_boundary = []
-    rf_fields_tuple = []
+    rf_cross_boundary = []
     importances = clf_rf.feature_importances_
     indices = np.argsort(importances)[::-1]
     col_set = indices[importances[indices].cumsum() <= valid_feature_prob]
@@ -53,25 +55,39 @@ def get_randomforest_blocks(clf_rf, col_name=None, topn_feat=0, valid_feature_pr
         rf_boundary.append(tree_boundary)
 
         # extend cross feature
-        step_n = topn_feat
-        cross_feature_list = []
-        cut_list = [0]
-        while (step_n>1):
-            next_list=[]
-            for cur_ in cut_list:
-                left_ = children_left[cur_]
-                right_ = children_right[cur_]
-                if left_>-1:
-                    tuple_ = [feature[cur_], feature[left_]]
-                    tuple_.sort()
-                    cross_feature_list.append(tuple_)
-                    next_list.append(left_)
-                if right_>-1:
-                    tuple_ = [feature[cur_], feature[right_]]
-                    tuple_.sort()
-                    cross_feature_list.append(tuple_)
-                    next_list.append(right_)
-            cut_list = next_list
-            step_n-=1
-        rf_fields_tuple.append(cross_feature_list)
-    return rf_boundary, rf_fields_tuple
+        ext_features = OrderedDict()
+        if cross_hierarchy >= 2:
+            step_n = cross_hierarchy
+            cross_feature = {feature[0]: [-np.inf, threshold[0], np.inf]}
+            cur_list = [0]
+            while (step_n > 1):
+                next_list = []
+                for cur_ in cur_list:
+                    left_ = children_left[cur_]
+                    right_ = children_right[cur_]
+                    for i in [left_, right_]:
+                        if i < 0:
+                            continue
+                        cur_feature = feature[i]
+                        cur_threshold = threshold[i]
+                        if cur_feature in cross_feature:
+                            boundary_ = cross_feature.get(cur_feature)
+                            boundary_.append(cur_threshold)
+                        else:
+                            boundary_ = [-np.inf, cur_threshold, np.inf]
+                        cross_feature.update({cur_feature: boundary_})
+                        next_list.append(i)
+                cur_list = next_list
+                step_n -= 1
+            col_sorted = col_name[indices] if col_name is not None else indices
+            for icol in col_sorted:
+                v = cross_feature.get(icol)
+                if v:
+                    sv = list(set([round(i, 4) for i in v]))
+                    sv.sort()
+                    ext_features.update({icol: sv})
+        rf_cross_boundary.append(ext_features)
+    return rf_boundary, rf_cross_boundary
+
+
+
