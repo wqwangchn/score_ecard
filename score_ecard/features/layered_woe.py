@@ -10,7 +10,7 @@ Desc:
 
 import numpy as np
 import pandas as pd
-from util import progress_bar
+from score_ecard.util import progress_bar
 
 
 class WeightOfEvidence:
@@ -28,7 +28,7 @@ class WeightOfEvidence:
         '''
         self.cur_field = df_x.name or 'field'
         # |fields |bins |bad |good |bad_prob |good_prob |woe |iv
-        bin = np.unique(df_x)
+        bin = np.unique(df_x.drop_duplicates())
         good = np.array([np.logical_and(df_x == val, df_y != self.bad_target).sum() for val in bin])
         bad = np.array([np.logical_and(df_x == val, df_y == self.bad_target).sum() for val in bin])
         prob_good = good / float(np.sum(df_y != self.bad_target))
@@ -74,7 +74,7 @@ class WeightOfFeeEvidence:
         '''
         self.cur_field = df_x.name or 'field'
         # |fields |bins |bad |good |bad_prob |good_prob |woe |iv
-        bin = np.unique(df_x)
+        bin = np.unique(df_x.drop_duplicates())
         good = np.array([((df_x == val)*df_fee_got).sum() for val in bin])
         bad = np.array([((df_x == val)*df_report_fee).sum() for val in bin])
         prob_good = good / float(np.sum(df_fee_got))
@@ -115,6 +115,7 @@ def get_woe_card(df_X, df_Y, fields_bins):
     # assert 'fee_got' in df_Y.columns
     # assert 'report_fee' in df_Y.columns
 
+    df_data = pd.DataFrame()
     woe_list = []
     len_=len(fields_bins)
     for i,(col, bins) in enumerate(fields_bins.items()):

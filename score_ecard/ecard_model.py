@@ -13,19 +13,22 @@ Desc:
 import numpy as np
 import pandas as pd
 import itertools
-from sklearn.linear_model import LogisticRegression
-from sklearn.tree import DecisionTreeClassifier
+import sys
+import warnings
+warnings.filterwarnings('ignore')
+
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report
+from sklearn.tree import DecisionTreeClassifier
 from xgboost import XGBClassifier
 
 from score_ecard import score_card
+from score_ecard.features import layered_woe as woe
 from score_ecard.features import randomforest_blocks as rf_bolcks
 from score_ecard.features import xgboost_blocks as xgb_bolcks
-from score_ecard.features import layered_woe as woe
-from util import progress_bar, get_weighted_std
-import warnings
-warnings.filterwarnings('ignore')
+from score_ecard.util import progress_bar, get_weighted_std, log_run_time, log_cur_time, log_step
+
 
 class ECardModel():
     def __init__(self,kwargs_lr=None, features_model='rf', kwargs_rf=None, kwargs_xgb=None, sample_frac=1.0,
@@ -105,6 +108,7 @@ class ECardModel():
             df_valY, df_valy, df_valy_binary = self.check_label(validation_Y)
             validation_idx = True
 
+        log_step("start model fitting ...")
         base_card, base_bins = self.get_base_card(df_X, df_Y, df_y, df_y_binary, sample_weight)
         self.trees_cards.append(base_card)
         base_score = self.get_batch_score(df_X, base_card, base_bins)
@@ -119,7 +123,7 @@ class ECardModel():
         base_boundaries = [base_bins]
         init_ecard = self.get_init_ecard(df_X, base_boundaries, ml_boundaries)
 
-        print("start model fitting ...")
+        log_step("start model iterative optimization ...")
         best_auc = -999
         best_insurance_auc = -999
         for i,tree_bins in enumerate(base_boundaries+ml_boundaries):
@@ -134,7 +138,7 @@ class ECardModel():
             tree_card = self.get_score_card(clf_lr,df_woe)
             pre_y = pre_y + clf_lr.predict_proba(x)[:,1:].sum(axis=1)
             cur_pre = (pre_y/(i+1))
-            train_auc = self.score_model.get_auc(cur_pre,df_y_binary, pre_target=1)[0]
+            train_auc = self.score_model.get_auc(cur_pre,df_y_binary.copy(), pre_target=1)[0]
             train_info = "train_auc={}".format(round(train_auc, 4))
             if self.is_best_bagging and (train_auc < best_auc):
                 vote = False
@@ -143,7 +147,7 @@ class ECardModel():
                 vote = True
             if ('fee_got' in df_Y.columns) and ('report_fee' in df_Y.columns):
                 train_insurance_auc = \
-                    self.score_model.get_g7_auc(pd.DataFrame(cur_pre), df_Y["fee_got"], df_Y["report_fee"], )[0]
+                    self.score_model.get_insurance_auc(pd.DataFrame(cur_pre), df_Y["fee_got"], df_Y["report_fee"], )[0]
                 train_info = "{}, train_insurance_auc={}".format(train_info, round(train_insurance_auc, 4))
                 if train_insurance_auc >= best_insurance_auc:
                     best_insurance_auc = train_insurance_auc
@@ -158,12 +162,12 @@ class ECardModel():
                 valx = self.get_woe_features(validation_X, df_woe, tree_bins)
                 pre_valy = pre_valy + clf_lr.predict_proba(valx)[:, 1:].sum(axis=1)
                 cur_pre = (pre_valy / (i + 1))
-                validation_auc = self.score_model.get_auc(cur_pre, df_valy_binary, pre_target=1)[0]
+                validation_auc = self.score_model.get_auc(cur_pre, df_valy_binary.copy(), pre_target=1)[0]
                 validation_info = "validation_auc={}".format(round(validation_auc, 4))
                 if ('fee_got' in df_valY.columns) and ('report_fee' in df_valY.columns):
-                    validation_insurance_auc = self.score_model.get_g7_auc(pd.DataFrame(cur_pre), df_valY["fee_got"], df_valY["report_fee"], )[0]
+                    validation_insurance_auc = self.score_model.get_insurance_auc(pd.DataFrame(cur_pre), df_valY["fee_got"], df_valY["report_fee"], )[0]
                     validation_info = "{}, validation_insurance_auc={}".format(validation_info,round(validation_insurance_auc,4))
-            print("sep_{}:\t{}\t{}".format(i+1,train_info,validation_info))
+            log_step("step_{}:\t{}\t{}".format(i+1,train_info,validation_info))
         self.score_ecard = self.get_cards_merge(self.trees_cards, init_ecard)
 
     def check_label(self, df_label):
@@ -210,9 +214,9 @@ class ECardModel():
         for i, (_field, _bin) in enumerate(dict_blocks.items()):
             progress_bar(i, len_-1)
             _card = df_card[df_card.特征字段 == _field]
-            _card.loc[:,'分箱'] = _card['分箱'].astype(str)
-            _data = pd.cut(df_X[_field].fillna(0), bins=_bin)
-            out = pd.DataFrame(_data).astype(str).join(_card.set_index('分箱'), on=_data.name, how='left')
+            _card.loc[:, '分箱'] = _card['分箱'].astype(str)
+            _data = pd.cut(df_X[_field].fillna(0), bins=_bin).astype(str)
+            out = pd.merge(_data,_card.set_index("分箱"),how='left',left_on=_data.name,right_index=True)
             col = [i for i in out.columns if 'woe' in i]
             col2 = [_field + "_" + i for i in col]
             df_x[col2] = out[col]
@@ -286,7 +290,6 @@ class ECardModel():
         gl_boundaries = self.get_boundaries_merge(base_boundaries, ml_boundaries)
         self.blocks = gl_boundaries
         len_=len(gl_boundaries)
-        print("init ecards ...")
         bins_list=[]
         for i, (col, bins) in enumerate(gl_boundaries.items()):
             progress_bar(i,len_-1)
@@ -393,7 +396,7 @@ class ECardModel():
             _card = df_card[df_card.field_ == field_]
             _card["bins_"] = _card.bins_.astype(str)
             _data = pd.cut(df_data[field_].fillna(0), bins=bin_).astype(str)
-            out = pd.DataFrame(_data).join(_card.set_index('bins_'), on=_data.name, how='left')
+            out = pd.merge(_data,_card.set_index("bins_"),how='left',left_on=_data.name,right_index=True)
             df_score[field_] = out['score_']
         df_score['init_base_score'] = df_card[df_card.field_ == 'init_base_score']['score_'].values[0]
         df_score['init_model_score'] = df_card[df_card.field_ == 'init_model_score']['score_'].values[0]
@@ -459,22 +462,22 @@ class ECardModel():
             clf_rf = RandomForestClassifier(**self.params_rf)
             clf_rf.fit(df_X, df_y, sample_weight=sample_weight)
             rf_report = classification_report(df_y, clf_rf.predict(df_X))
-            print('RF-report:', '\n', rf_report)
+            log_step("\nRF-report: \n {}".format(rf_report))
             rf_boundaries, _ = rf_bolcks.get_randomforest_blocks(clf_rf, col_name=df_X.columns)
             return rf_boundaries
         if self.features_model =='xgb':
             clf_xgb = XGBClassifier(**self.params_xgb)
             clf_xgb.fit(df_X, df_y, sample_weight=sample_weight)
             xgb_report = classification_report(df_y, clf_xgb.predict(df_X))
-            print('XGB-report:', '\n', xgb_report)
+            log_step("\nXGB-report: \n {}".format(xgb_report))
             xgb_boundaries = xgb_bolcks.get_xgboost_blocks(clf_xgb, col_name=df_X.columns)
             return xgb_boundaries
 
 
 if __name__ == '__main__':
     df_valid = pd.read_csv("data/train_test_data.csv")
-    df_train_data = df_valid[df_valid['train_test_tag'] == '训练集'].head(1000)
-    df_test_data = df_valid[df_valid['train_test_tag'] == '测试集'].head(1000)
+    df_train_data = df_valid[df_valid['train_test_tag'] == '训练集'].fillna(0)
+    df_test_data = df_valid[df_valid['train_test_tag'] == '测试集'].fillna(0)
     features_col = ['trip_avg_meters',
                     'trip_avg_seconds', 'trip_avg_distance', 'high_meters_ratio',
                     'province_meters_ratio', 'high_trip_cnt_ratio',
@@ -577,4 +580,4 @@ if __name__ == '__main__':
          'lr_pre': 0.327752870486023,
          'model1_score': 631
         }
-    print(ecard.get_single_score(data=data, level_threshold=[-np.inf,400,519,550,600,np.inf]))
+    print(ecard.get_single_score(data=data, level_threshold=[-np.inf,400,536,550,600,np.inf]))

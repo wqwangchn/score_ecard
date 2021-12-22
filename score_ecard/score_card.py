@@ -54,15 +54,34 @@ class ScoreCardModel:
         return bad_prob
 
     @classmethod
-    def get_auc(cls, df_pre, df_label, pre_target=1):
+    def get_auc(cls, df_pre, df_label, df_weight=None, pre_target=1):
         '''
         功能: 计算KS值，输出对应分割点和累计分布函数曲线图
         :param df_pre: 一维数组或series，代表模型得分
         :param df_label: 一维数组或series，代表真实的标签{0,1}
-        :return: 'auc': auc值，'crossdens': TPR&FPR
+        :param df_weight: 一维数组或series，代表样本权重
+        :param pre_target: 'auc': auc值，'crossdens': TPR&FPR
+        :return:
         '''
+        if isinstance(df_pre, pd.DataFrame):
+            df_pre = df_pre.iloc[:,0]
+        if isinstance(df_label, pd.DataFrame):
+            df_label = df_label.iloc[:,0]
+        if isinstance(df_weight, pd.DataFrame):
+            df_weight = df_weight.iloc[:,0]
+
+        if type(df_weight)==type(None):
+            df_weight = df_pre*np.array(0)+1
+        assert len(df_pre) == len(df_weight) == len(df_label)
+        df_pre.reset_index(drop=True, inplace=True)
+        df_weight.reset_index(drop=True, inplace=True)
+        df_label.reset_index(drop=True, inplace=True)
+
         df_label = df_label.apply(lambda x: 1 if x == pre_target else 0)
-        crossfreq = pd.crosstab(df_pre, df_label).sort_index(ascending=False)  # 按照预测概率从大到小排序作为阈值
+        if df_label.unique().size < 2:
+            return None, None
+        # 按照预测概率从大到小排序作为阈值
+        crossfreq = pd.crosstab(df_pre, df_label, df_weight, aggfunc=sum).fillna(0).sort_index(ascending=False)
         crossdens = crossfreq.cumsum(axis=0) / crossfreq.sum()
         crossdens.columns = ['fpr', 'tpr']
         crossdens.name = 'pre_threshold'
@@ -72,20 +91,37 @@ class ScoreCardModel:
         return auc, crossdens
 
     @classmethod
-    def get_g7_auc(cls, df_pre, df_got_fee, df_report_fee):
+    def get_insurance_auc(cls, df_pre, df_got_fee, df_report_fee, df_weight=None):
         '''
         功能: 计算auc值，输出对应分割点和累计分布函数曲线图
         :param df_pre: 一维数组或series，代表模型得分
         :param df_got_fee: 一维数组或series，代表已赚保费
         :param df_report_fee: 一维数组或series，代表赔付额
+        :param df_weight:
         :return: 'auc': auc值，'crossdens': TPR&FPR
         '''
-        df_data = pd.concat(
-            [df_pre.reset_index(drop=True), df_got_fee.reset_index(drop=True), df_report_fee.reset_index(drop=True)],
-            axis=1, ignore_index=True)
-        df_data.columns = ['pre', 'got_fee', 'report_fee']
-        df_data = df_data.set_index('pre').sort_index(ascending=False)  # 按照预测概率从大到小排序作为阈值
-        crossdens = df_data.cumsum(axis=0) / df_data.sum()
+        if isinstance(df_pre, pd.DataFrame):
+            df_pre = df_pre.iloc[:,0]
+        if isinstance(df_got_fee, pd.DataFrame):
+            df_got_fee = df_got_fee.iloc[:,0]
+        if isinstance(df_report_fee, pd.DataFrame):
+            df_report_fee = df_report_fee.iloc[:,0]
+        if isinstance(df_weight, pd.DataFrame):
+            df_weight = df_weight.iloc[:,0]
+
+        if type(df_weight)==type(None):
+            df_weight = df_pre*np.array(0)+1
+        assert len(df_pre) == len(df_weight) == len(df_got_fee) == len(df_report_fee)
+        df_pre.reset_index(drop=True, inplace=True)
+        df_weight.reset_index(drop=True, inplace=True)
+        df_got_fee.reset_index(drop=True, inplace=True)
+        df_report_fee.reset_index(drop=True, inplace=True)
+
+        df_data = pd.concat([df_got_fee, df_report_fee],axis=1, ignore_index=True)
+        df_data = df_data.mul(df_weight,axis=0).fillna(0)
+        df_data.columns = ['got_fee', 'report_fee']
+        order_index = df_pre.reset_index(drop=True).sort_values(ascending=False).index
+        crossdens = df_data.loc[order_index,:].cumsum(axis=0) / df_data.sum()
         crossdens.columns = ['fpr', 'tpr']
         crossdens.name = 'pre_threshold'
         fpr = crossdens.loc[:, 'fpr']
@@ -94,17 +130,36 @@ class ScoreCardModel:
         return auc, crossdens
 
     @classmethod
-    def get_ks(cls, df_pre, df_label, pre_target=1):
+    def get_ks(cls, df_pre, df_label, df_weight=None, pre_target=1):
         '''
         功能: 计算KS值，输出对应分割点和累计分布函数曲线图
         :param df_pre: 一维数组或series，代表模型得分
         :param df_label: 一维数组或series，代表真实的标签
+        :param df_weight: 一维数组或series，代表样本权重
+        :param pre_target:
         :return:
             'ks': KS值
             'crossdens': 好坏客户累积概率分布以及其差值gap
         '''
+        if isinstance(df_pre, pd.DataFrame):
+            df_pre = df_pre.iloc[:, 0]
+        if isinstance(df_label, pd.DataFrame):
+            df_label = df_label.iloc[:, 0]
+        if isinstance(df_weight, pd.DataFrame):
+            df_weight = df_weight.iloc[:, 0]
+
+        if type(df_weight) == type(None):
+            df_weight = df_pre * np.array(0) + 1
+        assert len(df_pre) == len(df_weight) == len(df_label)
+        df_pre.reset_index(drop=True, inplace=True)
+        df_weight.reset_index(drop=True, inplace=True)
+        df_label.reset_index(drop=True, inplace=True)
+
         df_label = df_label.apply(lambda x: 1 if x == pre_target else 0)
-        crossfreq = pd.crosstab(df_pre, df_label).sort_index(ascending=False)  # 按概率降序排序
+        if df_label.unique().size < 2:
+            return None, None
+        # 按照预测概率从大到小排序
+        crossfreq = pd.crosstab(df_pre, df_label, df_weight, aggfunc=sum).fillna(0).sort_index(ascending=False)
         crossdens = crossfreq.cumsum(axis=0) / crossfreq.sum()
         crossdens.columns = ['fpr', 'tpr']
         crossdens.name = 'pre_threshold'
@@ -113,25 +168,105 @@ class ScoreCardModel:
         return ks, crossdens
 
     @classmethod
-    def get_g7_ks(cls, df_pre, df_got_fee, df_report_fee):
+    def get_insurance_ks(cls, df_pre, df_got_fee, df_report_fee, df_weight=None):
         '''
         功能: 计算auc值，输出对应分割点和累计分布函数曲线图
         :param df_pre: 一维数组或series，代表模型得分
         :param df_got_fee: 一维数组或series，代表已赚保费
         :param df_report_fee: 一维数组或series，代表赔付额
+        :param df_weight:
         :return: 'auc': auc值，'crossdens': TPR&FPR
         '''
-        df_data = pd.concat(
-            [df_pre.reset_index(drop=True), df_got_fee.reset_index(drop=True), df_report_fee.reset_index(drop=True)],
-            axis=1)
-        df_data.columns = ['pre', 'got_fee', 'report_fee']
-        df_data = df_data.set_index('pre').sort_index(ascending=False)  # 按照预测概率从大到小排序作为阈值
-        crossdens = df_data.cumsum(axis=0) / df_data.sum()
+        if isinstance(df_pre, pd.DataFrame):
+            df_pre = df_pre.iloc[:,0]
+        if isinstance(df_got_fee, pd.DataFrame):
+            df_got_fee = df_got_fee.iloc[:,0]
+        if isinstance(df_report_fee, pd.DataFrame):
+            df_report_fee = df_report_fee.iloc[:,0]
+        if isinstance(df_weight, pd.DataFrame):
+            df_weight = df_weight.iloc[:,0]
+
+        if type(df_weight)==type(None):
+            df_weight = df_pre * np.array(0) + 1
+        assert len(df_pre) == len(df_weight) == len(df_got_fee) == len(df_report_fee)
+        df_pre.reset_index(drop=True, inplace=True)
+        df_weight.reset_index(drop=True, inplace=True)
+        df_got_fee.reset_index(drop=True, inplace=True)
+        df_report_fee.reset_index(drop=True, inplace=True)
+
+        df_data = pd.concat([df_got_fee, df_report_fee],axis=1, ignore_index=True)
+        df_data = df_data.mul(df_weight,axis=0).fillna(0)
+        df_data.columns = ['got_fee', 'report_fee']
+        order_index = df_pre.reset_index(drop=True).sort_values(ascending=False).index
+        crossdens = df_data.loc[order_index,:].cumsum(axis=0) / df_data.sum()
         crossdens.columns = ['fpr', 'tpr']
         crossdens.name = 'pre_threshold'
         crossdens['gap'] = abs(crossdens['fpr'] - crossdens['tpr'])
         ks = crossdens[crossdens['gap'] == crossdens['gap'].max()]
         return ks, crossdens
+
+    @classmethod
+    def get_auc_report(cls, df_pre, df_label, df_got_fee, df_report_fee, df_subset_identity=None, df_weight=None,
+                       pre_target=1, subset_weight='balance'):
+        if type(df_subset_identity) == type(None):
+            df_subset_identity = df_pre.apply(lambda _: '全量')
+        if type(df_weight) == type(None):
+            if 'balance' == subset_weight:
+                dict_ = (df_subset_identity.shape[0] / df_subset_identity.value_counts()).to_dict()
+                dict_.update({"其他": 1})
+                df_weight = df_subset_identity.apply(lambda x: dict_.get(x, 1))
+            else:
+                df_weight = df_pre * np.array(0) + 1
+        assert len(df_pre) == len(df_got_fee) == len(df_report_fee) == len(df_subset_identity) == len(df_weight), print(
+            len(df_pre), len(df_got_fee), len(df_report_fee), len(df_subset_identity), len(df_weight))
+        df_pre.reset_index(drop=True, inplace=True)
+        df_got_fee.reset_index(drop=True, inplace=True)
+        df_report_fee.reset_index(drop=True, inplace=True)
+        df_weight.reset_index(drop=True, inplace=True)
+        df_subset_identity.reset_index(drop=True, inplace=True)
+
+        auc_report_all = cls.get_auc(df_pre, df_label, df_weight, pre_target)[0]
+        auc_fee_all = cls.get_insurance_auc(df_pre, df_got_fee * 0 + 15000, df_report_fee, df_weight)[0]
+        index_ = ['全量']
+        data_ = [[len(df_pre), auc_report_all, auc_fee_all]]
+
+        if df_subset_identity.unique().size > 1:
+            for ii in df_subset_identity.unique():
+                idx = df_subset_identity[df_subset_identity == ii].index
+                auc_report = cls.get_auc(df_pre.loc[idx], df_label.loc[idx], df_weight.loc[idx], pre_target)[0]
+                auc_fee = \
+                cls.get_insurance_auc(df_pre.loc[idx], df_got_fee.loc[idx], df_report_fee.loc[idx], df_weight.loc[idx])[0]
+                data_.append([len(idx), auc_report, auc_fee])
+                index_.append(ii)
+        df_report = pd.DataFrame(data_, columns=['样本量', '出险率_auc', '赔付率_auc'], index=index_).sort_values("样本量",
+                                                                                                         ascending=False)
+        return df_report
+
+    @classmethod
+    def get_auc_report2(cls, df, by_field='subset_identity', weight_field=None, pre_target=1, subset_weight='balance',
+                        fix_fee_got=True):
+        assert 'predict' in df.columns
+        assert 'label' in df.columns
+        assert 'fee_got' in df.columns
+        assert 'report_fee' in df.columns
+        df_pre = df.predict
+        df_label = df.label
+        df_got_fee = df.fee_got
+        df_report_fee = df.report_fee
+        if fix_fee_got:
+            df_got_fee = df_got_fee * 0 + 1000
+        if by_field in df.columns:
+            df_subset_identity = df[by_field]
+        else:
+            df_subset_identity = None
+        if weight_field in df.columns:
+            df_weight = df[weight_field]
+        else:
+            df_weight = None
+        df_report = cls.get_auc_report(df_pre, df_label, df_got_fee, df_report_fee, df_subset_identity, df_weight,
+                                   pre_target, subset_weight)
+
+        return df_report
 
 # 评分校准
 def get_calibration_score(raw_score):

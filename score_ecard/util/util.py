@@ -11,7 +11,10 @@ Desc:
 import sys
 import math
 import inspect
+from functools import wraps
 import numpy as np
+import time
+import logging
 
 # 1.进度条展示 progress_bar(1, 100)
 def progress_bar(portion, total):
@@ -80,3 +83,36 @@ def get_distince_blocks(x, box_num=5, drop_duplicates=True):
     blocks[0] = -np.inf
     blocks[-1] = np.inf
     return blocks.tolist()
+
+# 5.函数执行时间
+def log_run_time(func):
+    logging.basicConfig(level='INFO')
+    logger = logging.getLogger()
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        func_name = func.__name__
+        if kwargs.get('log', True):
+            func_start_time = time.time()
+            logger.info('{} Start {}'.format(func_name, time_format(func_start_time)))
+        result = func(*args, **kwargs)
+        if kwargs.get('log', True):
+            func_end_time = time.time()
+            func_runtime = func_end_time - func_start_time
+            logger.info('{} End {}, Runtime {} S'.format(func_name, time_format(func_end_time), func_runtime))
+        return result
+    return wrapper
+
+def log_cur_time():
+    logging.basicConfig(level='INFO')
+    logger = logging.getLogger()
+    lineno = sys._getframe().f_back.f_lineno
+    co_name = sys._getframe().f_back.f_code.co_name
+    logger.info('{}:lineno_{} Start {}'.format(co_name,lineno, time_format(time.time())))
+
+def log_step(info):
+    logging.basicConfig(level='INFO')
+    logger = logging.getLogger()
+    logger.info('{} {}'.format(time_format(time.time()),info))
+
+def time_format(time_value):
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time_value))
