@@ -115,4 +115,8 @@ def log_step(info):
     logger.info('{} {}'.format(time_format(time.time()),info))
 
 def time_format(time_value):
-    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time_value))
+    local_time = time.localtime(time_value)
+    data_head = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
+    data_secs = (time_value - int(time_value)) * 1000
+    time_stamp = "%s.%03d" % (data_head, data_secs)
+    return time_stamp
