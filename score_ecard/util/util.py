@@ -17,13 +17,15 @@ import time
 import logging
 
 # 1.进度条展示 progress_bar(1, 100)
-def progress_bar(portion, total):
+def progress_bar(portion, total, is_pass=True):
     """
     total 总数据大小，portion 已经传送的数据大小
     :param portion: 已经接收的数据量
     :param total: 总数据量
     :return: 接收数据完成，返回True
     """
+    if is_pass:
+        return True
     part = total / 50  # 1%数据的大小
     count = math.ceil(portion / part)
     sys.stdout.write('\r')

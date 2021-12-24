@@ -131,7 +131,7 @@ class ECardModel():
                 frac=1.0, replace=True, weights=sample_weight, random_state=i
             ).sample(frac=self.sample_frac, replace=False, random_state=i).index
             df_woe = woe.get_woe_card(df_X.loc[sample_idx], df_Y.loc[sample_idx], tree_bins)
-            x = self.get_woe_features(df_X, df_woe)
+            x = self.get_woe_features(df_X, df_woe, tree_bins)
             clf_lr = LogisticRegression(**self.params_lr)
             clf_lr.fit(x.loc[sample_idx], df_y_binary.loc[sample_idx], sample_weight=sample_weight.loc[sample_idx])
             clf_lr.col_name=x.columns
@@ -159,7 +159,7 @@ class ECardModel():
 
             validation_info=None
             if validation_idx and vote:
-                valx = self.get_woe_features(validation_X, df_woe)
+                valx = self.get_woe_features(validation_X, df_woe, tree_bins)
                 pre_valy = pre_valy + clf_lr.predict_proba(valx)[:, 1:].sum(axis=1)
                 cur_pre = (pre_valy / (i + 1))
                 validation_auc = self.score_model.get_auc(cur_pre, df_valy_binary.copy(), pre_target=1)[0]
@@ -198,7 +198,7 @@ class ECardModel():
         tree_boundaries, cross_fields_boundaries = rf_bolcks.get_randomforest_blocks(clf_base_tree, col_name=df_X.columns, cross_hierarchy=self.cross_hierarchy)
         tree_bins, cross_fields_bins = tree_boundaries[0], cross_fields_boundaries[0]
         df_woe = woe.get_woe_card(df_X, df_Y, tree_bins)
-        x = self.get_woe_features(df_X, df_woe)
+        x = self.get_woe_features(df_X, df_woe, tree_bins)
         clf_lr = LogisticRegression(**self.params_lr)
         clf_lr.fit(x, df_y_binary, sample_weight=sample_weight)
         clf_lr.col_name = x.columns
@@ -208,19 +208,15 @@ class ECardModel():
             self.calc_cross_boundaries(cross_fields_bins)
         return tree_card, tree_bins
 
-    def get_woe_features(self, df_X,df_card):
+    def get_woe_features(self, df_X,df_card,dict_blocks):
         df_x = pd.DataFrame()
-        field_list = df_card.特征字段.unique()
-        len_ = len(field_list)
-        for i,_field in enumerate(field_list):
-            progress_bar(i, len_ - 1)
+        len_ = len(dict_blocks)
+        for i, (_field, _bin) in enumerate(dict_blocks.items()):
+            progress_bar(i, len_-1)
             _card = df_card[df_card.特征字段 == _field]
-            bin_interval = _card['分箱'].unique()
-            _bin = [i.left for i in bin_interval] + [bin_interval[-1].right]
-            _bin.sort()
-            _card.loc[:, '分箱'] = _card['分箱'].astype(str)
-            _data = pd.cut(df_X[_field].fillna(0), bins=_bin).astype(str)
-            out = pd.merge(_data, _card.set_index("分箱"), how='left', left_on=_data.name, right_index=True)
+            _card.loc[:,'分箱'] = _card['分箱'].astype(str)
+            _data = pd.cut(df_X[_field].fillna(0), bins=_bin)
+            out = pd.DataFrame(_data).astype(str).join(_card.set_index('分箱'), on=_data.name, how='left')
             col = [i for i in out.columns if 'woe' in i]
             col2 = [_field + "_" + i for i in col]
             df_x[col2] = out[col]

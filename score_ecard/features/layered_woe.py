@@ -170,12 +170,11 @@ def get_woe_card(df_X, df_Y, fields_bins):
             card[["特大事故车辆数", "非特大事故车辆数", "特大事故占比", "非特大事故占比", "woe5", "iv5"]] = card5[
                 ['good', 'bad', 'good_prob', 'bad_prob', 'woe', 'iv']]
 
-        if bin_data.unique().size<2:
-            rdata_ = pd.DataFrame(bin_data.value_counts().index)
-            rdata_.columns=['分箱']
-            card = pd.merge(card, rdata_, how='right', left_on='分箱', right_on='分箱')
-            col_t_ = [i for i in card.columns if i !='分箱']
-            card[col_t_] = card[col_t_].bfill().ffill()
+        rdata_ = pd.DataFrame(bin_data.value_counts().index)
+        rdata_.columns=['分箱']
+        card = pd.merge(card, rdata_, how='right', left_on='分箱', right_on='分箱')
+        col_t_ = [i for i in card.columns if i !='分箱']
+        card[col_t_] = card[col_t_].bfill().ffill()
 
         woe_list.append(card)
     woe_dict = pd.concat(woe_list).reset_index(drop=True)
