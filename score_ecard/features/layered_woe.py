@@ -121,10 +121,10 @@ def get_woe_card(df_X, df_Y, fields_bins):
     for i,(col, bins) in enumerate(fields_bins.items()):
         progress_bar(i,len_-1)
         bin_data = pd.cut(df_X.loc[:,col].fillna(0), bins=bins)
-
         # label1：是否出险
         woe1 = WeightOfEvidence()
-        woe1.fit(bin_data, df_Y["label"])
+        x1 = woe1.fit_transform(bin_data, df_Y["label"])
+        df_data["{}_woe1".format(col)] = x1["woe"]
         card = woe1.woe_card
         card.columns = ['特征字段', '分箱', '无出险车辆数', '出险车辆数',
                         '无出险占比', '出险占比', 'woe1', 'iv1']
@@ -133,7 +133,8 @@ def get_woe_card(df_X, df_Y, fields_bins):
         # label2：赔付率
         if ('fee_got' in df_Y.columns) and ('report_fee' in df_Y.columns):
             woe2 = WeightOfFeeEvidence()
-            woe2.fit(bin_data, df_Y["fee_got"], df_Y["report_fee"])
+            x = woe2.fit_transform(bin_data, df_Y["fee_got"], df_Y["report_fee"])
+            df_data["{}_woe".format(col)] = x["woe"]
             card2 = woe2.woe_card
             card[["已赚保费", "赔付金额", "已赚保费占比", "赔付金额占比", "woe0", "iv0"]] = card2[
                 ['get_fee', 'report_fee', 'get_fee_prob', 'report_fee_prob', 'woe', 'iv']]
@@ -141,7 +142,8 @@ def get_woe_card(df_X, df_Y, fields_bins):
         # label3：是否有过赔付2k+
         if 'label_ordinary' in df_Y.columns:
             woe3 = WeightOfEvidence()
-            woe3.fit(bin_data, df_Y["label_ordinary"])
+            x2 = woe3.fit_transform(bin_data, df_Y["label_ordinary"])
+            df_data["{}_woe2".format(col)] = x2["woe"]
             card3 = woe3.woe_card
             card[["赔付车辆数", "无赔付车辆数", "赔付车辆占比", "无赔付车辆占比", "woe2", "iv2"]] = card3[
                 ['good', 'bad', 'good_prob', 'bad_prob', 'woe', 'iv']]
@@ -149,7 +151,8 @@ def get_woe_card(df_X, df_Y, fields_bins):
         # label4：是否大事故1w+
         if 'label_serious' in df_Y.columns:
             woe4 = WeightOfEvidence()
-            woe4.fit(bin_data, df_Y["label_serious"])
+            x3 = woe4.fit_transform(bin_data, df_Y["label_serious"])
+            df_data["{}_woe3".format(col)] = x3["woe"]
             card4 = woe4.woe_card
             card[["重大事故车辆数", "非重大事故车辆数", "重大事故占比", "非重大事故占比", "woe3", "iv3"]] = card4[
                 ['good', 'bad', 'good_prob', 'bad_prob', 'woe', 'iv']]
@@ -157,7 +160,8 @@ def get_woe_card(df_X, df_Y, fields_bins):
         # label5：是否重大事故5w+
         if 'label_major' in df_Y.columns:
             woe5 = WeightOfEvidence()
-            woe5.fit(bin_data, df_Y["label_major"])
+            x4 = woe5.fit_transform(bin_data, df_Y["label_major"])
+            df_data["{}_woe4".format(col)] = x4["woe"]
             card5 = woe5.woe_card
             card[["特大事故车辆数", "非特大事故车辆数", "特大事故占比", "非特大事故占比", "woe4", "iv4"]] = card5[
                 ['good', 'bad', 'good_prob', 'bad_prob', 'woe', 'iv']]
@@ -165,13 +169,15 @@ def get_woe_card(df_X, df_Y, fields_bins):
         # label6：是否特大事故20W'+
         if 'label_devastating' in df_Y.columns:
             woe5 = WeightOfEvidence()
-            woe5.fit(bin_data, df_Y["label_devastating"])
+            x5 = woe5.fit_transform(bin_data, df_Y["label_devastating"])
+            df_data["{}_woe5".format(col)] = x5["woe"]
             card5 = woe5.woe_card
             card[["特大事故车辆数", "非特大事故车辆数", "特大事故占比", "非特大事故占比", "woe5", "iv5"]] = card5[
                 ['good', 'bad', 'good_prob', 'bad_prob', 'woe', 'iv']]
 
-        rdata_ = pd.DataFrame(bin_data.value_counts().index)
+        rdata_ = pd.DataFrame(bin_data.value_counts().sort_index().index)
         rdata_.columns=['分箱']
+        rdata_["阈值"] = bins[1:]
         card = pd.merge(card, rdata_, how='right', left_on='分箱', right_on='分箱')
         col_t_ = [i for i in card.columns if i !='分箱']
         card[col_t_] = card[col_t_].bfill().ffill()
@@ -179,6 +185,7 @@ def get_woe_card(df_X, df_Y, fields_bins):
         woe_list.append(card)
     woe_dict = pd.concat(woe_list).reset_index(drop=True)
     woe_dict.columns.name = 'idx'
-    col = ['特征字段', '分箱', '车辆总数'] + [i for i in woe_dict if 'woe' in i]+ [i for i in woe_dict if 'iv' in i]
+    col = ['特征字段', '分箱', '阈值', '车辆总数'] + [i for i in woe_dict if 'woe' in i]+ [i for i in woe_dict if 'iv' in i]
     df_woe = woe_dict[col]
-    return df_woe
+    df_woe.rename(columns={'特征字段':'field_', '分箱':'bins_', '阈值':'boundary_', '车辆总数':'size_'},inplace=True)
+    return df_woe, df_data

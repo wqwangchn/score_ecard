@@ -10,7 +10,7 @@ rm -rf ./pynovice.egg-info
 git push origin --tags
 
 # 2. add tag
-git tag v1.2.0 -m 'add xgboost+lr score_ecard'
+git tag v1.2.1 -m 'fixed bug'
 
 python setup.py sdist bdist_wheel
 python3 -m twine upload --repository-url https://upload.pypi.org/legacy/ dist/*

@@ -17,7 +17,7 @@ import time
 import logging
 
 # 1.进度条展示 progress_bar(1, 100)
-def progress_bar(portion, total, is_pass=True):
+def progress_bar(portion, total, is_pass=False):
     """
     total 总数据大小，portion 已经传送的数据大小
     :param portion: 已经接收的数据量
