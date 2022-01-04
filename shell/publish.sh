@@ -10,7 +10,7 @@ rm -rf ./pynovice.egg-info
 git push origin --tags
 
 # 2. add tag
-git tag v1.2.1 -m 'fixed bug'
+git tag v1.2.2 -m 'optimize speed'
 
 python setup.py sdist bdist_wheel
 python3 -m twine upload --repository-url https://upload.pypi.org/legacy/ dist/*

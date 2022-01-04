@@ -9,6 +9,7 @@ Desc:
 '''
 import numpy as np
 import pandas as pd
+import random
 import itertools
 import warnings
 warnings.filterwarnings('ignore')
@@ -29,7 +30,7 @@ from score_ecard.util import progress_bar, get_weighted_std, log_run_time, log_c
 
 class ECardModel():
     def __init__(self,kwargs_lr=None, features_model='rf', kwargs_rf=None, kwargs_xgb=None, sample_frac=1.0,
-                 cross_hierarchy=0, is_best_bagging=False, optimize_type='global'):
+                 cross_hierarchy=0, is_best_bagging=False, optimize_type='global', n_estimators=None):
         '''
 
         :param kwargs_lr:
@@ -95,6 +96,13 @@ class ECardModel():
         self.cur_card_index = 0
         self.feature_ext_info = {}
         self.score_model = score_card.ScoreCardModel()
+        random.seed(666)
+        if n_estimators is None:
+            self.n_estimators = self.params_rf.get(n_estimators,
+                                                   100) if features_model == 'rf' else self.params_xgb.get(n_estimators,
+                                                                                                           100)
+        else:
+            self.n_estimators = n_estimators
 
     def fit(self, df_X, df_Y, validation_X:pd.DataFrame=None, validation_Y:pd.DataFrame=None, sample_weight=None, validation_step=1):
         assert df_X.shape[0] == df_Y.shape[0]
@@ -105,6 +113,7 @@ class ECardModel():
         log_step("start model fitting ...")
         df_X = self.calc_base_card(df_X, df_Y, df_y, df_y_binary, sample_weight)
         ml_boundaries = self.get_ml_boundaries(df_X, df_y, sample_weight=sample_weight)
+        random.shuffle(ml_boundaries)
         init_card, df_X_bins = self.get_init_ecard(df_X, ml_boundaries)
 
         validation_idx = False
@@ -123,6 +132,8 @@ class ECardModel():
         best_insurance_auc = -999
         best_card = init_card
         for i,tree_bins in enumerate(ml_boundaries):
+            if i>self.n_estimators:
+                continue
             sample_idx = df_X.sample(
                 frac=1.0, replace=True, weights=sample_weight, random_state=i
             ).sample(frac=self.sample_frac, replace=False, random_state=i).index
