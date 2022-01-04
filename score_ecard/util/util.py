@@ -17,7 +17,7 @@ import time
 import logging
 
 # 1.进度条展示 progress_bar(1, 100)
-def progress_bar(portion, total, is_pass=False):
+def progress_bar(portion, total, is_pass=True):
     """
     total 总数据大小，portion 已经传送的数据大小
     :param portion: 已经接收的数据量
@@ -104,12 +104,12 @@ def log_run_time(func):
         return result
     return wrapper
 
-def log_cur_time():
+def log_cur_time(info=""):
     logging.basicConfig(level='INFO')
     logger = logging.getLogger()
     lineno = sys._getframe().f_back.f_lineno
     co_name = sys._getframe().f_back.f_code.co_name
-    logger.info('{}:lineno_{} Start {}'.format(co_name,lineno, time_format(time.time())))
+    logger.info('{}:lineno_{} Start {}{}'.format(co_name,lineno, time_format(time.time()), info))
 
 def log_step(info):
     logging.basicConfig(level='INFO')
