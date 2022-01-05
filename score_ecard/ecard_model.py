@@ -19,7 +19,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report
 from sklearn.tree import DecisionTreeClassifier
 from xgboost import XGBClassifier
-from sklearn.ensemble import BaggingClassifier as BC
+from multiprocessing import Process, Manager
 
 from score_ecard import score_card
 from score_ecard.features import layered_woe as woe
@@ -91,7 +91,7 @@ class ECardModel():
         self.cross_hierarchy = cross_hierarchy
         self.is_best_bagging = is_best_bagging
         self.optimize_type = optimize_type
-        self.base_cards = []
+        self.init_cards = []
         self.score_ecard = None
         self.cur_card_index = 0
         self.feature_ext_info = {}
@@ -183,6 +183,101 @@ class ECardModel():
         self.score_lower = best_card.groupby("field_").score_.min()
         self.score_upper = best_card.groupby("field_").score_.max()
 
+    def fit_parallar(self, df_X, df_Y, validation_X:pd.DataFrame=None, validation_Y:pd.DataFrame=None, sample_weight=None, validation_step=1):
+        assert df_X.shape[0] == df_Y.shape[0]
+        df_Y, df_y, df_y_binary= self.check_label(df_Y)
+        if type(sample_weight)==type(None):
+            sample_weight=df_y*0+1
+
+        log_step("start model fitting ...")
+        df_X = self.calc_base_card(df_X, df_Y, df_y, df_y_binary, sample_weight)
+        ml_boundaries = self.get_ml_boundaries(df_X, df_y, sample_weight=sample_weight)
+        random.shuffle(ml_boundaries)
+        init_card, df_X_bins = self.get_init_ecard(df_X, ml_boundaries)
+
+        validation_idx = False
+        if type(validation_X) != type(None):
+            assert validation_X.shape[0] == validation_Y.shape[0]
+            df_valY, df_valy, df_valy_binary = self.check_label(validation_Y)
+            validation_X = self.get_cross_features(validation_X)
+            df_valX_bins = pd.DataFrame()
+            for col_, bins_ in self.blocks.items():
+                idata = pd.cut(validation_X.loc[:, col_].fillna(0), bins=bins_)
+                df_valX_bins[col_] = idata
+            validation_idx = True
+
+        log_step("start model iterative optimization ...")
+        def fit_card(i,x_,y_,y_binary_,weight_,tree_bins_,return_dict):
+            df_woe, x = woe.get_woe_card(x_, y_, tree_bins_)
+            clf_lr = LogisticRegression(**self.params_lr)
+            clf_lr.fit(x, y_binary_, weight_)
+            clf_lr.col_name = x.columns
+            add_card = self.get_score_card(clf_lr, df_woe)
+            return_dict[i] = add_card
+
+        return_dict = Manager().dict()
+        jobs = []
+        for i, tree_bins_ in enumerate(ml_boundaries):
+            if i > self.n_estimators:
+                continue
+            sample_idx = df_X.sample(
+                frac=1.0, replace=True, weights=sample_weight, random_state=i
+            ).sample(frac=self.sample_frac, replace=False, random_state=i).index
+            x_ = df_X.loc[sample_idx]
+            y_ = df_Y.loc[sample_idx]
+            y_binary_ = df_y_binary.loc[sample_idx]
+            weight_ = sample_weight.loc[sample_idx]
+            p = Process(target=fit_card, args=(i,x_,y_,y_binary_,weight_,tree_bins_,return_dict))
+            jobs.append(p)
+            p.start()
+        for proc in jobs:
+            proc.join()
+
+        best_auc = -999
+        best_insurance_auc = -999
+        best_card = init_card
+        for add_card in return_dict.values():
+            cur_card = self.get_cards_merge(best_card, add_card,
+                                            cur_weight=self.cur_card_index / (self.cur_card_index + 1),
+                                            add_weight=1.0 / (self.cur_card_index + 1))
+            if 'local'==self.optimize_type:
+                idx_ = sample_idx
+            else:
+                idx_ = df_X_bins.index
+            df_pre_score = self.calc_score(cur_card, df_X_bins.loc[idx_], is_woe_feature = True)
+            predict_ = -1*df_pre_score
+            train_auc = self.score_model.get_auc(predict_, df_y_binary.loc[idx_].copy(), pre_target=1)[0]
+            train_info = "train_auc={}".format(round(train_auc, 4))
+            if self.is_best_bagging and (train_auc < best_auc):
+                vote = False
+            else:
+                best_auc = train_auc
+                vote = True
+            if ('fee_got' in df_Y.columns) and ('report_fee' in df_Y.columns):
+                train_insurance_auc = \
+                    self.score_model.get_insurance_auc(predict_, df_Y.loc[idx_]["fee_got"], df_Y.loc[idx_]["report_fee"])[0]
+                train_info = "{}, train_insurance_auc={}".format(train_info, round(train_insurance_auc, 4))
+                if train_insurance_auc >= best_insurance_auc:
+                    best_insurance_auc = train_insurance_auc
+                    vote = True
+            if vote:
+                self.cur_card_index += 1
+                best_card = cur_card
+
+            validation_info=None
+            if validation_idx and vote and (i%validation_step==0):
+                df_pre_score = self.calc_score(cur_card, df_valX_bins, is_woe_feature=True)
+                predict_ = -1 * df_pre_score
+                validation_auc = self.score_model.get_auc(predict_, df_valy_binary.copy(), pre_target=1)[0]
+                validation_info = "validation_auc={}".format(round(validation_auc, 4))
+                if ('fee_got' in df_valY.columns) and ('report_fee' in df_valY.columns):
+                    validation_insurance_auc = self.score_model.get_insurance_auc(predict_, df_valY["fee_got"], df_valY["report_fee"], )[0]
+                    validation_info = "{}, validation_insurance_auc={}".format(validation_info,round(validation_insurance_auc,4))
+            log_step("step_{}:\t{}\t{}".format(i+1,train_info,validation_info))
+        self.score_ecard = best_card
+        self.score_lower = best_card.groupby("field_").score_.min()
+        self.score_upper = best_card.groupby("field_").score_.max()
+
     def check_label(self, df_label):
         df_Y=df_label.copy()
         if df_Y.shape[-1] == 1:
@@ -231,7 +326,7 @@ class ECardModel():
         log_step("Init train_auc={}".format(round(train_auc, 4)))
 
         base_card = self.get_score_card(clf_lr, base_woe)
-        self.base_cards.append(base_card)
+        self.init_cards.append(base_card)
         return df_X
 
     def calc_cross_boundaries(self, boundaries):
@@ -323,7 +418,7 @@ class ECardModel():
         boundaries_list = []
         if len(ext_boundaries_list)>0:
             boundaries_list.extend(ext_boundaries_list)
-        for icard in self.base_cards:
+        for icard in self.init_cards:
             base_date=icard.groupby('field_').boundary_.agg(lambda x:sorted(set([-np.inf,np.inf]+list(x))) if len(x)>2 else None)
             base_boundaries = base_date[base_date.notna()].to_dict()
             if len(base_boundaries) > 0:
@@ -336,6 +431,9 @@ class ECardModel():
         df_X_bins = pd.DataFrame()
         for i, (col, bins) in enumerate(boundaries.items()):
             progress_bar(i,len_-1)
+            if col not in df_X.columns:
+                log_step(" ------ {} column not exists, ignore!")
+                continue
             idata = pd.cut(df_X.loc[:, col].fillna(0), bins=bins)
             df_X_bins[col] = idata
             data_bin = idata.value_counts()
@@ -353,7 +451,7 @@ class ECardModel():
         df_card['score_']=0
 
         cur_card = df_card
-        for icard_ in self.base_cards:
+        for icard_ in self.init_cards:
             if self.cur_card_index==0:
                 cur_card = self.get_cards_merge(cur_card, icard_, cur_weight=0, add_weight=1.0)
             else:
@@ -526,11 +624,11 @@ if __name__ == '__main__':
                           'label_serious', 'label_major', 'label_devastating', 'label_8w','fee_got','report_fee']]
     df_Y['label']=df_Y.apply(lambda x:x['label'] if x["report_fee"]<5000 else 2,axis=1)
     ecard = ECardModel(
-        kwargs_rf={'n_estimators':2},
+        kwargs_rf={'n_estimators':20},
         kwargs_xgb={'n_estimators':2},
         cross_hierarchy=3,
         is_best_bagging=True,
-        features_model='xgb',
+        features_model='rf',
         optimize_type='local',
     )
     ecard.fit(df_X, df_Y,df_X, df_Y,sample_weight=df_Y['label']+1, validation_step=3)
@@ -542,4 +640,5 @@ if __name__ == '__main__':
     print("""
     3.calc score 优化为predict，提高速度
     4.woe计算优化
+    5.并行优化
     """)
