@@ -5,12 +5,12 @@
 # 1.删除已有包
 rm -rf ./build
 rm -rf ./dist
-rm -rf ./pynovice.egg-info
+rm -rf ./*.egg-info
 
 git push origin --tags
 
 # 2. add tag
-git tag v1.2.3 -m 'optimize speed'
+git tag v1.2.4 -m 'add ecard model explanation function'
 
-python setup.py sdist bdist_wheel
+python ./setup.py sdist bdist_wheel
 python3 -m twine upload --repository-url https://upload.pypi.org/legacy/ dist/*
