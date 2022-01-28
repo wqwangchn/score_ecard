@@ -105,6 +105,7 @@ class ECardModel():
             self.n_estimators = n_estimators
 
     def fit(self, df_X, df_Y, validation_X:pd.DataFrame=None, validation_Y:pd.DataFrame=None, sample_weight=None, validation_step=1):
+        self.init_check()
         assert df_X.shape[0] == df_Y.shape[0]
         df_Y, df_y, df_y_binary= self.check_label(df_Y)
         if type(sample_weight)==type(None):
@@ -180,8 +181,8 @@ class ECardModel():
                     validation_info = "{}, validation_insurance_auc={}".format(validation_info,round(validation_insurance_auc,4))
             log_step("step_{}:\t{}\t{}".format(i+1,train_info,validation_info))
         self.score_ecard = best_card
-        self.score_lower = best_card.groupby("field_").score_.min()
-        self.score_upper = best_card.groupby("field_").score_.max()
+        self.score_lower = best_card.groupby("field_").score_.min().sum()
+        self.score_upper = best_card.groupby("field_").score_.max().sum()
 
     def fit_parallar(self, df_X, df_Y, validation_X:pd.DataFrame=None, validation_Y:pd.DataFrame=None, sample_weight=None, validation_step=1):
         assert df_X.shape[0] == df_Y.shape[0]
@@ -305,17 +306,16 @@ class ECardModel():
             clf_base_tree.estimators_ = [clf_base_tree]
         tree_boundaries, cross_fields_boundaries = rf_bolcks.get_randomforest_blocks(clf_base_tree, col_name=df_X.columns, cross_hierarchy=self.cross_hierarchy)
         tree_bins, cross_fields_bins = tree_boundaries[0], cross_fields_boundaries[0]
-        if len(cross_fields_bins)>1:
-            self.calc_cross_boundaries(cross_fields_bins)
-            df_X = self.get_cross_features(df_X)
-            for icol in df_X.columns:
-                if 'ext-' not in icol:
-                    continue
-                else:
-                    value_ = [-np.inf,np.inf]
-                    value_.extend(df_X[icol].unique()[1:-1])
-                    value_.sort()
-                    tree_bins.update({icol:value_})
+        self.calc_cross_boundaries(cross_fields_bins)
+        df_X = self.get_cross_features(df_X)
+        for icol in df_X.columns:
+            if 'ext-' not in icol:
+                continue
+            else:
+                value_ = [-np.inf,np.inf]
+                value_.extend(df_X[icol].unique()[1:-1])
+                value_.sort()
+                tree_bins.update({icol:value_})
         base_woe, x = woe.get_woe_card(df_X, df_Y, tree_bins)
         clf_lr = LogisticRegression(**self.params_lr)
         clf_lr.fit(x, df_y_binary, sample_weight=sample_weight)
@@ -335,6 +335,11 @@ class ECardModel():
         :param boundaries: 默认按重要度由大到小排序的字段分箱
         :return:
         '''
+        if len(boundaries) > 1:
+            return
+        init_ext = self.feature_ext_info.get('df_ext',pd.DataFrame())
+        init_boundaries = self.feature_ext_info.get('boundaries_ext',{})
+        boundaries = boundaries.update(init_boundaries)
         df_ext = pd.DataFrame(columns=['id_'])
         for col_, bins_ in boundaries.items():
             df_tmp = pd.cut([], bins=bins_).value_counts().sort_index().reset_index().rename(
@@ -350,10 +355,14 @@ class ECardModel():
             if j not in df_ext.columns:
                 continue
             col_='ext-{}-{}'.format(i,j)
-
-            df_tmp = pd.DataFrame(df_ext[[i,j]].astype(str).apply(lambda x: '-'.join(x), axis=1).drop_duplicates())
-            df_tmp.columns=['tmp_']
-            df_tmp[col_] = range(len(df_tmp))
+            if col_ in init_ext.columns:
+                df_tmp = init_ext.copy()
+                df_tmp['tmp_'] = df_tmp[[i, j]].astype(str).apply(lambda x: '-'.join(x), axis=1)
+                df_tmp = df_tmp[['tmp_',col_]].drop_duplicates()
+            else:
+                df_tmp = pd.DataFrame(df_ext[[i,j]].astype(str).apply(lambda x: '-'.join(x), axis=1).drop_duplicates())
+                df_tmp.columns=['tmp_']
+                df_tmp[col_] = range(len(df_tmp))
             df_ext['tmp_'] = df_ext[[i,j]].astype(str).apply(lambda x: '-'.join(x), axis=1)
             df_ext = df_ext.join(df_tmp.set_index('tmp_'),on='tmp_',how='inner')
         if 'tmp_' in df_ext.columns:
@@ -457,7 +466,7 @@ class ECardModel():
             else:
                 cur_card = self.get_cards_merge(cur_card, icard_,
                                                 cur_weight=self.cur_card_index / (self.cur_card_index + 1),
-                                                last_weight=1.0 / (self.cur_card_index + 1))
+                                                add_weight=1.0 / (self.cur_card_index + 1))
             self.cur_card_index += 1
 
         return cur_card, df_X_bins
@@ -506,7 +515,7 @@ class ECardModel():
             df_score[field_] = out['score_']
         df_score['init_base_score'] = df_card[df_card.field_ == 'init_base_score']['score_'].values[0]
         df_score['init_model_score'] = df_card[df_card.field_ == 'init_model_score']['score_'].values[0]
-        score = df_score.sum(axis=1).apply(lambda x: round(x))
+        score = df_score.sum(axis=1).apply(lambda x: round(x,2))
         return score
 
     def get_importance_(self):
@@ -596,8 +605,22 @@ class ECardModel():
                         if icol not in df_ext.columns:
                             break
                         idx_equ = idx_equ & df_ext[icol].apply(lambda x: data.get(icol) in x).astype(int)
-                    data.update({i: df_ext.loc[idx_equ, i].values[0]})
+                    value_ = df_ext.loc[idx_equ, i].values
+                    if len(value_) > 0:
+                        data.update({i: value_[0]})
+                    else:
+                        data.update({i: 0})
         return data
+
+    def init_check(self):
+        if isinstance(self.init_cards,pd.DataFrame):
+            col_ = [i for i in self.init_cards.columns if 'ext-'==i[:4]]
+            if len(col_)>0:
+                df_ext = self.feature_ext_info.get('df_ext')
+                for i in col_:
+                    if i not in df_ext.columns:
+                        log_step("no detail info for cross field:{}".format(i))
+                        break
 
 if __name__ == '__main__':
     df_valid = pd.read_csv("data/train_test_data.csv")
@@ -628,10 +651,31 @@ if __name__ == '__main__':
         kwargs_xgb={'n_estimators':2},
         cross_hierarchy=3,
         is_best_bagging=True,
-        features_model='rf',
+        features_model='xgb',
         optimize_type='local',
     )
-    ecard.fit(df_X, df_Y,df_X, df_Y,sample_weight=df_Y['label']+1, validation_step=3)
+
+
+    # 初始加载河北模型进行微调 -------------------
+    import dill
+    def load_local_model(model_path):
+        model = dill.load(open(model_path, "rb"))
+        clf = model.get('model')
+        score_card = model.get('score_card')
+        score_bins = model.get('score_bins')
+        get_card_level = model.get('get_card_level')
+        func_calc_level = lambda x: get_card_level(x["card_score"], x["run_meters"], x["run_seconds"], score_bins)
+
+        return clf, func_calc_level
+
+
+    model_file = 'data/score_card_model_local_major_hebeibeijing_v3.1.0.pkl'
+    clf_hebei, func_calc_level = load_local_model(model_path=model_file)
+    ecard.init_cards.append(clf_hebei.score_ecard)
+    ecard.feature_ext_info = clf_hebei.feature_ext_info
+    ### ----------------------------------------------
+
+    ecard.fit(df_X, df_Y,df_X, df_Y,sample_weight=df_Y['label']+1, validation_step=1)
     print(ecard.get_importance_())
     print(ecard.predict(df_X))
     print(ecard.predict_hundred(df_X))
