@@ -25,10 +25,9 @@ from score_ecard import score_card
 from score_ecard.features import layered_woe as woe
 from score_ecard.features import randomforest_blocks as rf_bolcks
 from score_ecard.features import xgboost_blocks as xgb_bolcks
-from score_ecard.util import progress_bar, get_weighted_std, log_run_time, log_cur_time, log_step
+from score_ecard.util import progress_bar, get_weighted_std, log_step,summary_explanation,model_factor_report
 
-
-class ECardModel():
+class ECardModel(object):
     def __init__(self,kwargs_lr=None, features_model='rf', kwargs_rf=None, kwargs_xgb=None, sample_frac=1.0,
                  cross_hierarchy=0, is_best_bagging=False, optimize_type='global', n_estimators=None):
         '''
@@ -335,11 +334,11 @@ class ECardModel():
         :param boundaries: 默认按重要度由大到小排序的字段分箱
         :return:
         '''
-        if len(boundaries) > 1:
+        if len(boundaries) < 1:
             return
         init_ext = self.feature_ext_info.get('df_ext',pd.DataFrame())
         init_boundaries = self.feature_ext_info.get('boundaries_ext',{})
-        boundaries = boundaries.update(init_boundaries)
+        boundaries.update(init_boundaries)
         df_ext = pd.DataFrame(columns=['id_'])
         for col_, bins_ in boundaries.items():
             df_tmp = pd.cut([], bins=bins_).value_counts().sort_index().reset_index().rename(
@@ -622,27 +621,19 @@ class ECardModel():
                         log_step("no detail info for cross field:{}".format(i))
                         break
 
+    def model_explanation(self, title=None, save_path=None,**kwargs):
+        return summary_explanation(self.score_ecard, title=title, save_path=save_path,**kwargs)
+
+    def factor_report(self, title='ecard', max_display=999, save_path=None):
+        return model_factor_report(self.score_ecard, title, max_display, save_path)
+
 if __name__ == '__main__':
     df_valid = pd.read_csv("data/train_test_data.csv")
-    df_train_data = df_valid[df_valid['train_test_tag'] == '训练集'].fillna(0)
-    df_test_data = df_valid[df_valid['train_test_tag'] == '测试集'].fillna(0)
-    features_col = ['trip_avg_meters',
-                    'trip_avg_seconds', 'trip_avg_distance', 'high_meters_ratio',
-                    'province_meters_ratio', 'high_trip_cnt_ratio',
-                    'province_trip_cnt_ratio', 'curvature_g2_trip_meters_ratio',
-                    'ng_23_6_seconds_ratio', 'ng_23_6_trip_cnt_ratio', 'daily_run_kmeters',
-                    'daily_run_hours', 'daily_trip_cnt', 'daily_nohigh_kmeters',
-                    'daily_ng_23_6_hours', 'trip_long_cnt_ratio', 'day_high_meters_ratio',
-                    'ng_province_meters_ratio', 'morn_6_10_seconds_ratio',
-                    'dusk_17_20_seconds_ratio', 'ng_23_6_avg_speed', 'morn_6_10_avg_speed',
-                    'dusk_17_20_avg_speed', 'low_speed_seconds_ratio',
-                    'low_speed_block_cnt_ratio', 'week_1_5_seconds_ratio',
-                    'geohash4_top10_meters_ratio', 'trip_r30m_cnt_ratio',
-                    'common_line_top30_cnt_ratio', 'ratio_meitan', 'ratio_gangtie', 'ratio_shashi',
-                    'ratio_kuaidi', 'ratio_nonglinmufu', 'ratio_jiadian', 'ratio_jixie',
-                    'ratio_qiche', 'ratio_fengdian', 'ratio_other'
-                    ]
-    df_X = df_train_data[features_col]
+    df_train_data = df_valid[df_valid['train_test_tag'] == '训练集'].fillna(0).head(1000)
+    df_test_data = df_valid[df_valid['train_test_tag'] == '测试集'].fillna(0).head(1000)
+    feature_columns = df_train_data.columns[4:33].tolist()
+    feature_columns.extend(df_train_data.columns[36:46])
+    df_X = df_train_data[feature_columns]
     df_Y = df_train_data[['label', 'label_ordinary',
                           'label_serious', 'label_major', 'label_devastating', 'label_8w','fee_got','report_fee']]
     df_Y['label']=df_Y.apply(lambda x:x['label'] if x["report_fee"]<5000 else 2,axis=1)

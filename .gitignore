@@ -16,3 +16,4 @@ score_ecard.egg-info
 RELEASE-VERSION
 score_ecard/data/
 score_ecard/.DS_Store
+score_ecard/test

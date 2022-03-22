@@ -40,13 +40,13 @@ def summary_explanation(score_card, max_display=15, title=None, row_width=12, ro
     # color
     g7_color = ['#5100ad', '#5100ad', '#8d4fe8', '#a577e9', '#b490ea', '#c3a8eb', '#c9bbdd', '#dad4e3']
     g7_colormap = mplt.colors.LinearSegmentedColormap.from_list('cmap', g7_color[::-1], 256)
-    g7_color_palette = sns.color_palette("Purples", n_colors=int(size_ * 1.2))
+    g7_color_palette = sns.color_palette("Purples", n_colors=int(size_ * 1.2+10))
 
     # violinplot
     custom_params = {"axes.spines.left": False, "axes.spines.right": False, "axes.spines.top": False}
     sns.set_theme(style="white", rc=custom_params, palette=None)
-    sns.violinplot(data=data, x="score_", y="field_", palette=g7_color_palette[::-1],
-                   inner="points", orient="h", scale="width")
+    sns.violinplot(data=data, x="score_", y="field_", palette=g7_color_palette[::-1][10:],
+                   inner="stick", orient="h", scale="width")
 
     # chart_init
     fig = pl.gcf().set_size_inches(row_width, size_ * row_height + 1.5)
@@ -120,8 +120,10 @@ def sample_explanation(score_card, max_display=15, title=None, row_width=12, row
             idata = raw_data.score_.values
         x, y = data_adapter(idata, row_height)
         x_idx = np.argsort(abs(y))
-        cweight = [dict(zip(x[x_idx], abs(y[x_idx]))).get(i, 1) for i in x]
-        pl.scatter(x=x, y=pos + y, s=20, alpha=1, cmap=g7_colormap, c=cweight, rasterized=len(x) > 10000)
+        cweight = np.array([dict(zip(x[x_idx], abs(y[x_idx]))).get(i, 1) for i in x])
+        w_idx = np.argsort(cweight)
+        pl.scatter(x=x[w_idx], y=pos + y[w_idx], s=20, alpha=1, cmap=g7_colormap, c=cweight[w_idx],
+                   rasterized=len(x) > 10000)
         yticks_idx.append(pos)
         yticks_name.append(icol_)
     pl.yticks(yticks_idx, yticks_name, fontsize=10)

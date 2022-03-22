@@ -10,7 +10,7 @@ rm -rf ./*.egg-info
 git push origin --tags
 
 # 2. add tag
-git tag v1.2.4 -m 'add ecard model explanation function'
+git tag v1.2.7 -m 'add ecard model standardized function'
 
 python ./setup.py sdist bdist_wheel
 python3 -m twine upload --repository-url https://upload.pypi.org/legacy/ dist/*
