@@ -97,8 +97,8 @@ class ECardModel(object):
         self.score_model = score_card.ScoreCardModel()
         random.seed(666)
         if n_estimators is None:
-            self.n_estimators = self.params_rf.get(n_estimators,
-                                                   100) if features_model == 'rf' else self.params_xgb.get(n_estimators,
+            self.n_estimators = self.params_rf.get("n_estimators",
+                                                   100) if features_model == 'rf' else self.params_xgb.get("n_estimators",
                                                                                                            100)
         else:
             self.n_estimators = n_estimators
