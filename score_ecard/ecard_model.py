@@ -73,7 +73,7 @@ class ECardModel(object):
             'eval_metric': 'auc'
         }
         self.params_base_tree = {
-            'max_depth': 10,
+            'max_depth': 3,
             'max_features': None,
             'min_samples_leaf': 0.01,
             'class_weight': "balanced",
@@ -603,7 +603,7 @@ class ECardModel(object):
                     for icol in colinfo[1:]:
                         if icol not in df_ext.columns:
                             break
-                        idx_equ = idx_equ & df_ext[icol].apply(lambda x: data.get(icol) in x).astype(int)
+                        idx_equ = idx_equ & df_ext[icol].apply(lambda x: data.get(icol) in x).astype(bool)
                     value_ = df_ext.loc[idx_equ, i].values
                     if len(value_) > 0:
                         data.update({i: value_[0]})

@@ -28,7 +28,8 @@ class ECardStandardized(object):
         self.preprocessing_after = model.get('preprocessing_after',self.func_empty)
         self.postprocessing = model.get('postprocessing',self.get_g7_level)
 
-    def dump(self, clf_model, model_name):
+    def dump(self, clf_model, model_name, model='all'):
+        assert model in ['all','pure'],'all for backup, pure for online'
         score_card = clf_model.score_ecard
         card_ext = clf_model.feature_ext_info.get("df_ext",pd.DataFrame())
         assert hasattr(clf_model,'score_bins'), "need to set 'clf_model.score_bins=[]' for score_level"
@@ -37,8 +38,12 @@ class ECardStandardized(object):
             info = clf_model.info
         else:
             info = ""
+        if model =='pure':
+            model_raw = None
+        else:
+            model_raw = clf_model
         model = {
-            'model': clf_model,
+            'model': model_raw,
             'score_card': score_card,
             'features_ext': card_ext,
             'score_bins': score_bins,
@@ -98,7 +103,7 @@ class ECardStandardized(object):
                 for jcol in colinfo[1:]:
                     if jcol not in df_ext.columns:
                         break
-                    idx_equ = idx_equ & df_ext[jcol].apply(lambda _: data.get(jcol) in _)
+                    idx_equ = idx_equ & df_ext[jcol].apply(lambda _: data.get(jcol) in _).astype(bool)
                 value_ = df_ext.loc[idx_equ, icol].values
                 if len(value_) > 0:
                     data.update({icol: value_[0]})
