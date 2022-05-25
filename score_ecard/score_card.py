@@ -206,8 +206,11 @@ class ScoreCardModel:
         return ks, crossdens
 
     @classmethod
-    def get_auc_report(cls, df_pre, df_label, df_got_fee, df_report_fee, df_subset_identity=None, df_weight=None,
+    def get_auc_report(cls, df_pre, df_label, df_report_fee, df_got_fee=None, df_subset_identity=None, df_weight=None,
                        pre_target=1, subset_weight='balance'):
+
+        if type(df_got_fee) == type(None):
+            df_got_fee = df_pre.apply(lambda _: 15000)
         if type(df_subset_identity) == type(None):
             df_subset_identity = df_pre.apply(lambda _: '全量')
         if type(df_weight) == type(None):
@@ -226,7 +229,7 @@ class ScoreCardModel:
         df_subset_identity.reset_index(drop=True, inplace=True)
 
         auc_report_all = cls.get_auc(df_pre, df_label, df_weight, pre_target)[0]
-        auc_fee_all = cls.get_insurance_auc(df_pre, df_got_fee * 0 + 15000, df_report_fee, df_weight)[0]
+        auc_fee_all = cls.get_insurance_auc(df_pre, df_got_fee, df_report_fee, df_weight)[0]
         index_ = ['全量']
         data_ = [[len(df_pre), auc_report_all, auc_fee_all]]
 

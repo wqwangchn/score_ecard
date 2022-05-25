@@ -13,16 +13,18 @@ import dill
 
 class ECardStandardized(object):
     def __init__(self):
+        self.clf = None
         self.score_card = None
         self.score_bins = None
         self.card_ext = pd.DataFrame()
 
     def load(self, model_name:str):
         model = dill.load(open(model_name, "rb"))
+        self.clf = model.get('model')
         self.score_card  = model.get('score_card')
         self.score_bins = model.get('score_bins',[])
         self.card_ext = model.get('features_ext',pd.DataFrame())
-        # self.card_ext = model.get('card_ext',pd.DataFrame())
+        self.info = model.get('info','')
 
         self.preprocessing_befor = model.get('preprocessing_befor',self.func_empty)
         self.preprocessing_after = model.get('preprocessing_after',self.func_empty)

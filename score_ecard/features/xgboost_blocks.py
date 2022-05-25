@@ -26,6 +26,6 @@ def get_xgboost_blocks(clf_xgb, col_name=None, valid_feature_prob=1.0):
     df_trees = df_trees[df_trees.Feature.isin(col_set)]
     df_boundary = df_trees.groupby(['Tree', 'Feature'])['Split'].apply(
         lambda x: sorted([-np.inf,np.inf]+list(set(x)))).unstack().applymap(
-        lambda x: [-np.inf,np.inf] if (x==None) or str(x)=='nan' else x)
-    xgb_boundary = [dict(j) for i, j in df_boundary.iterrows()]
+        lambda x: None if str(x)=='nan' else x)
+    xgb_boundary = [dict(j.dropna()) for i, j in df_boundary.iterrows()]
     return xgb_boundary

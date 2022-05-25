@@ -26,6 +26,7 @@ from score_ecard.features import layered_woe as woe
 from score_ecard.features import randomforest_blocks as rf_bolcks
 from score_ecard.features import xgboost_blocks as xgb_bolcks
 from score_ecard.util import progress_bar, get_weighted_std, log_step,summary_explanation,model_factor_report
+from score_ecard.util.ecard_standardized import ECardStandardized
 
 class ECardModel(object):
     def __init__(self,kwargs_lr=None, features_model='rf', kwargs_rf=None, kwargs_xgb=None, sample_frac=1.0,
@@ -626,6 +627,11 @@ class ECardModel(object):
 
     def factor_report(self, title='ecard', max_display=999, save_path=None):
         return model_factor_report(self.score_ecard, title, max_display, save_path)
+
+    def dump(self, model_name, score_bins):
+        self.score_bins = score_bins
+        ecard_standardized = ECardStandardized()
+        ecard_standardized.dump(self, model_name, model='all')
 
 if __name__ == '__main__':
     df_valid = pd.read_csv("data/train_test_data.csv")

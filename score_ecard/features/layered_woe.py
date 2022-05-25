@@ -18,7 +18,7 @@ class WeightOfEvidence:
     def __init__(self,bad_target=1):
         self.bad_target = bad_target
         self.eps = 1e-4
-        self.woe_card = None
+        self.woe_cards = None
 
     def fit(self,df_x,df_y):
         '''
@@ -193,6 +193,9 @@ def get_woe_card(df_X, df_Y, fields_bins):
     :param fields_bins: 特征的分箱字典
     :return: 构建woe字典
     '''
+    df_Y = pd.DataFrame(df_Y)
+    if df_Y.shape[-1] == 1:
+        df_Y.columns = ['label']
     assert 'label' in df_Y.columns
     results = []
     p = Pool()
@@ -201,7 +204,6 @@ def get_woe_card(df_X, df_Y, fields_bins):
         results.append(p.apply_async(get_woe_card_single, args=(df_x,df_Y,bins)))
     p.close()
     p.join()
-
     woe_list = []
     data_list = []
     for res in results:
@@ -211,7 +213,7 @@ def get_woe_card(df_X, df_Y, fields_bins):
     woe_dict = pd.concat(woe_list).reset_index(drop=True)
     woe_dict.columns.name = 'idx'
     col = ['特征字段', '分箱', '阈值', '车辆总数'] + [i for i in woe_dict if 'woe' in i]+ [i for i in woe_dict if 'iv' in i]
-    df_woe = woe_dict[col]
+    df_woe = woe_dict.loc[:,col]
     df_woe.rename(columns={'特征字段':'field_', '分箱':'bins_', '阈值':'boundary_', '车辆总数':'size_'},inplace=True)
     df_data = pd.concat(data_list,axis=1)
     return df_woe, df_data

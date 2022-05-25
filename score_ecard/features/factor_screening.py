@@ -12,7 +12,7 @@ import pandas as pd
 def factor_screening(df_x:pd.DataFrame, df_label:pd.Series, df_report_fee:pd.Series=None, frac_label_stability=0.2,
                     frac_report_stability=0.1,sampling_frequency=5):
     '''
-    ## 1.特征筛选
+    ## 1.特征筛选，抽样n次中划分的两部分数据分布均区域一致的topn因子，即稳定的因子
     :param df_x: 特征集合
     :param df_label: 是否出险 或 出险次数
     :param df_report_fee: 赔付金额
@@ -38,6 +38,8 @@ def factor_screening(df_x:pd.DataFrame, df_label:pd.Series, df_report_fee:pd.Ser
         df_stability['group_'] = df_stability.index.isin(group_idx).astype(int)
 
         for icol in df_x.columns:
+            if df_stability[icol].unique().size == 1:
+                continue
             df_stability[icol] = pd.qcut(df_stability[icol], q=10, duplicates='drop')
             df_indactors_tmp = df_stability.groupby([icol, 'group_']).agg(
                 {
