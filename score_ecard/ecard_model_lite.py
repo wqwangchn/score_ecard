@@ -10,6 +10,7 @@ Desc:
 
 import numpy as np
 import pandas as pd
+import math
 import random
 import warnings
 warnings.filterwarnings('ignore')
@@ -21,7 +22,7 @@ from score_ecard.features.xgboost_woe import XGBoostWoe
 from score_ecard.util.ecard_standardized import ECardStandardized
 
 class ECardModel(object):
-    def __init__(self, kwargs_lr=None, kwargs_xgb=None, sample_frac=1.0, cross_hierarchy=0, n_estimators=None):
+    def __init__(self, kwargs_lr=None, kwargs_xgb=None, sample_frac=1.0, cross_hierarchy=0, n_estimators=None, **kwargs):
         '''
 
         :param kwargs_lr:
@@ -83,7 +84,7 @@ class ECardModel(object):
             sample_weight=df_y*0+1
         log_step("start model fitting ...")
         df_woe_list = self.xgb_woe_model.fit(df_X, df_y)
-        df_cards_list = self.calc_score_card(df_woe_list, df_y_binary, sample_weight)
+        df_cards_list = self.calc_score_card_v2(df_woe_list, df_y_binary, sample_weight)
         self.score_ecard = self.merge_cards(df_cards_list,df_X)
 
         self.score_lower = self.score_ecard.groupby("field_").score_.min().sum()
@@ -104,25 +105,28 @@ class ECardModel(object):
         if 'label_binary' in df_Y.columns:
             df_y_binary = df_Y["label_binary"]
         ## ---end
+        del df_Y
         return df_y, df_y_binary
 
     def calc_score_card(self, df_woe_list, df_y_binary, sample_weight):
         '''
-
+        pass
         :param df_woe_list:
         :param df_y_binary:
         :param sample_weight:
         :return:
         '''
         woe_cards_list = self.xgb_woe_model.woe_cards.copy()
+        col_list = [i.columns for i in df_woe_list]
         df_woe_data = pd.concat(df_woe_list,axis=1)
+
         clf_lr = LogisticRegression(**self.params_lr)
         clf_lr.fit(df_woe_data, df_y_binary, sample_weight=sample_weight)
+        del df_woe_data
 
         # score_card of xgb_trees
         lr_coef = clf_lr.coef_[0]
         i = 0
-        col_list = [i.columns for i in df_woe_list]
         for idx_,(icol_,df_iwoe) in enumerate(zip(col_list,woe_cards_list)):
             icol_coef_ = lr_coef[i:i+len(icol_)]
             coef_dict = dict(zip(icol_, icol_coef_))
@@ -136,6 +140,71 @@ class ECardModel(object):
         #  init score_card
         init_score = self.score_model.score_offset
         base_score = self.score_model.score_factor * clf_lr.intercept_[0]
+        df_base_card = pd.DataFrame(
+            [['init_base_score', pd.Interval(-np.inf, np.inf, closed='right'), np.inf, -1, init_score],
+             ['init_model_score', pd.Interval(-np.inf, np.inf, closed='right'), np.inf, -1, base_score]
+             ], columns=['field_', 'bins_', 'boundary_', 'size_', 'score_'])
+        woe_cards_list.append(df_base_card)
+
+        return woe_cards_list
+
+    def calc_score_card_v2(self, df_woe_list, df_y_binary, sample_weight,batch_zise=100):
+        '''
+
+        :param df_woe_list:
+        :param df_y_binary:
+        :param sample_weight:
+        :return:
+        '''
+        woe_cards_list = self.xgb_woe_model.woe_cards.copy()
+        clf_lr = LogisticRegression(**self.params_lr)
+        batch_num = math.ceil(len(df_woe_list) / batch_zise)
+        col_list = [i.columns for i in df_woe_list]
+        if batch_num<=1:
+            df_woe_data = pd.concat(df_woe_list,axis=1)
+            del df_woe_list
+            clf_lr.fit(df_woe_data, df_y_binary, sample_weight=sample_weight)
+            del df_woe_data
+            lr_coef = clf_lr.coef_[0]
+            lr_intercept_ = clf_lr.intercept_[0]
+        else:
+            lr_coef_list = []
+            lr_intercept_list = []
+            lf_score_list = []
+            for i in range(batch_num):
+                df_idata = pd.concat(df_woe_list[:batch_num],axis=1)
+                del df_woe_list[:batch_num]
+                clf_lr.fit(df_idata, df_y_binary, sample_weight=sample_weight)
+                lr_coef_list.append(clf_lr.coef_[0])
+                lr_intercept_list.append(clf_lr.intercept_[0])
+                lr_iscore = clf_lr.decision_function(df_idata)
+                lf_score_list.append(lr_iscore)
+                del df_idata
+            lf_score_ = np.array(lf_score_list).T
+
+            clf_lr2 = LogisticRegression(penalty='l2', C=1.0, class_weight=True, random_state=666)
+            clf_lr2.fit(lf_score_, df_y_binary, sample_weight=sample_weight)
+            for i,w in enumerate(clf_lr2.coef_[0]):
+                lr_coef_list[i] = lr_coef_list[i]*w
+                lr_intercept_list[i] = lr_intercept_list[i]*w
+            lr_coef = np.concatenate(lr_coef_list)
+            lr_intercept_ = sum(lr_intercept_list)+clf_lr2.intercept_[0]
+
+        # score_card of xgb_trees
+        i = 0
+        for idx_,(icol_,df_iwoe) in enumerate(zip(col_list,woe_cards_list)):
+            icol_coef_ = lr_coef[i:i+len(icol_)]
+            coef_dict = dict(zip(icol_, icol_coef_))
+
+            woe_col = [i for i in df_iwoe.columns if 'woe' in i]
+            get_coef_summary = lambda x: np.sum([coef_dict.get(x['field_'] + '_' + i) * x[i] for i in woe_col])
+            df_iwoe['score_'] = self.score_model.score_factor * df_iwoe.apply(get_coef_summary, axis=1)
+            woe_cards_list[idx_] = df_iwoe[['field_', 'bins_', 'boundary_', 'size_', 'score_']]
+            i += len(icol_)
+
+        #  init score_card
+        init_score = self.score_model.score_offset
+        base_score = self.score_model.score_factor * lr_intercept_
         df_base_card = pd.DataFrame(
             [['init_base_score', pd.Interval(-np.inf, np.inf, closed='right'), np.inf, -1, init_score],
              ['init_model_score', pd.Interval(-np.inf, np.inf, closed='right'), np.inf, -1, base_score]

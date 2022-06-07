@@ -198,7 +198,7 @@ def get_woe_card(df_X, df_Y, fields_bins):
         df_Y.columns = ['label']
     assert 'label' in df_Y.columns
     results = []
-    p = Pool()
+    p = Pool(4)
     for i,(col, bins) in enumerate(fields_bins.items()):
         df_x = df_X.loc[:, col].fillna(0)
         results.append(p.apply_async(get_woe_card_single, args=(df_x,df_Y,bins)))
