@@ -16,13 +16,17 @@ from score_ecard.features import layered_woe as woe
 from score_ecard.features import xgboost_blocks as xgb_bolcks
 from score_ecard.util import progress_bar, log_step
 
+
+def call_back_default(idata, df_out, idx, total_num):
+    df_out.append(idata)
+
 class XGBoostWoe:
     def __init__(self, xgb_params):
         self.xgb_params = xgb_params
         self.eps = 1e-4
         self.woe_cards = []
 
-    def fit(self,df_X,df_Y,sample_weight=None):
+    def fit(self,df_X,df_Y,sample_weight=None,call_back=call_back_default):
         '''
 
         :param df_X: 特征数据
@@ -51,7 +55,7 @@ class XGBoostWoe:
             y_ = (df_Y == classes_list[i]).astype(int)
             df_woe, x = woe.get_woe_card(df_X, y_, tree_bins)
             self.woe_cards.append(df_woe)
-            data.append(x)
+            call_back(x,data,i+1,len(xgb_boundaries))
         log_step("\nXGBoostWoe: <-<-<- (end). ")
 
         return data
