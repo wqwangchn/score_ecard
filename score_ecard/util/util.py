@@ -122,3 +122,36 @@ def time_format(time_value):
     data_secs = (time_value - int(time_value)) * 1000
     time_stamp = "%s.%03d" % (data_head, data_secs)
     return time_stamp
+
+def get_kde(x,data_array,bandwidth=0.1):
+    '''
+    核密度函数
+    :param x:
+    :param data_array:
+    :param bandwidth:
+    :return:
+    '''
+    def gauss(x):
+        import math
+        return (1/math.sqrt(2*math.pi))*math.exp(-0.5*(x**2))
+    N=len(data_array)
+    res=0
+    if len(data_array)==0:
+        return 0
+    for i in range(len(data_array)):
+        res += gauss((x-data_array[i])/bandwidth)
+    res /= (N*bandwidth)
+    return res
+
+def clac_kde_fit(arr_x,bins=100):
+    '''
+    密度拟合分布
+    :param arr_x:
+    :param bins:
+    :return:
+    '''
+    bins = min(len(arr_x),bins)
+    bandwidth=1.05*np.std(arr_x)*(len(arr_x)**(-1/5))
+    bins_list = np.linspace(min(arr_x),max(arr_x),bins)
+    fit_data = [get_kde(bins_list[i],arr_x,bandwidth) for i in range(len(bins_list))]
+    return fit_data
